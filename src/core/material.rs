@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub(crate) const LAYER_TILE_SIDE: usize = 32;
+pub(crate) const BUILDUP_SCALE: f32 = 1.15;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PixelSurfaceState {
@@ -379,7 +380,7 @@ impl SurfaceState {
 
     pub fn local_capacity(&self, index: usize) -> f32 {
         let valley_depth = (1.0 - self.current_height[index]).clamp(0.0, 1.0);
-        0.38 + 1.55 * valley_depth + 0.24 * self.fiber[index]
+        BUILDUP_SCALE * (0.38 + 1.55 * valley_depth + 0.24 * self.fiber[index])
     }
 
     pub fn remaining_capacity(&self, index: usize) -> f32 {

@@ -11,6 +11,8 @@ pub struct QuarterTurn {
     pub width: usize,
     pub height: usize,
     pub clockwise: bool,
+    pub reflection: Option<bool>,
+    tips: HashMap<usize,Arc<super::brush::BrushTip>>,
     layers: HashMap<usize, Arc<VectorLayer>>,
     strokes: HashMap<usize, Arc<VectorStroke>>,
     bases: HashMap<usize, Arc<SparseDepositState>>,
@@ -21,13 +23,24 @@ impl QuarterTurn {
             width,
             height,
             clockwise,
+            reflection: None,
+            tips: HashMap::new(),
             layers: HashMap::new(),
             strokes: HashMap::new(),
             bases: HashMap::new(),
         }
     }
+    pub fn mirror(width:usize,height:usize,horizontal:bool)->Self {
+        let mut out=Self::new(width,height,true);out.reflection=Some(horizontal);out
+    }
+    pub fn orientation(&self,x:f32,y:f32)->(f32,f32) {
+        if self.reflection.is_some(){(x,-y)}else{(-x,-y)}
+    }
     pub fn index(&self, i: usize) -> usize {
         let (x, y) = (i % self.width, i / self.width);
+        if let Some(horizontal)=self.reflection {
+            return if horizontal {y*self.width+self.width-1-x}else{(self.height-1-y)*self.width+x};
+        }
         if self.clockwise {
             x * self.height + self.height - 1 - y
         } else {
@@ -35,6 +48,9 @@ impl QuarterTurn {
         }
     }
     pub fn point(&self, p: Vec2) -> Vec2 {
+        if let Some(horizontal)=self.reflection {
+            return if horizontal {Vec2::new(self.width as f32-p.x,p.y)}else{Vec2::new(p.x,self.height as f32-p.y)};
+        }
         if self.clockwise {
             Vec2::new(self.height as f32 - p.y, p.x)
         } else {
@@ -50,7 +66,7 @@ impl QuarterTurn {
         *values = rotated;
     }
     pub fn sparse(&self, old: &SparseDepositState) -> SparseDepositState {
-        let mut out = SparseDepositState::new(self.height, self.width);
+        let mut out = if self.reflection.is_some(){SparseDepositState::new(self.width,self.height)}else{SparseDepositState::new(self.height, self.width)};
         for (&tile_id, tile) in &old.tiles {
             let tile_x = tile_id % self.width.div_ceil(32) * 32;
             let tile_y = tile_id / self.width.div_ceil(32) * 32;
@@ -59,8 +75,7 @@ impl QuarterTurn {
                 let y = tile_y + offset / 32;
                 if x < self.width && y < self.height && !state.is_empty() {
                     let mut state = state;
-                    state.orientation_x = -state.orientation_x;
-                    state.orientation_y = -state.orientation_y;
+                    (state.orientation_x,state.orientation_y)=self.orientation(state.orientation_x,state.orientation_y);
                     out.set(self.index(y * self.width + x), state);
                 }
             }
@@ -90,6 +105,10 @@ impl QuarterTurn {
                     return found.clone();
                 }
                 let mut new = (**s).clone();
+                if let Some(horizontal)=self.reflection {
+                    new=s.mirrored(eframe::egui::pos2(self.width as f32*0.5,self.height as f32*0.5),horizontal,&mut self.tips);
+                    let new=Arc::new(new);self.strokes.insert(key,new.clone());return new;
+                }
                 let angle = if self.clockwise { 90. } else { -90. };
                 for p in &mut new.points {
                     let v = self.point(Vec2::new(p.x, p.y));
@@ -137,9 +156,9 @@ impl QuarterTurn {
             color_g_mass,
             color_b_mass
         );
-        for value in &mut doc.surface.orientation_x {
+        if self.reflection.is_none() { for value in &mut doc.surface.orientation_x {
             *value = -*value;
-        }
+        } }
         for value in &mut doc.surface.orientation_y {
             *value = -*value;
         }
@@ -148,8 +167,10 @@ impl QuarterTurn {
             layer.vectors = self.layer(&layer.vectors);
         }
         doc.selection.quarter_turn(self);
-        std::mem::swap(&mut doc.spec.width_px, &mut doc.spec.height_px);
-        std::mem::swap(&mut doc.spec.width_mm, &mut doc.spec.height_mm);
+        if self.reflection.is_none() {
+            std::mem::swap(&mut doc.spec.width_px, &mut doc.spec.height_px);
+            std::mem::swap(&mut doc.spec.width_mm, &mut doc.spec.height_mm);
+        }
         doc.mark_all_dirty();
     }
 }

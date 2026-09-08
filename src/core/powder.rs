@@ -61,7 +61,7 @@ pub fn apply(
     };
     let mut changed = false;
     let inv_radius2 = 4. / (size * size);
-    let work_scale = p * settings.flow * strength * travel / size.max(1.);
+    let work_scale = p * settings.flow * strength * travel / (size.max(1.) * super::material::BUILDUP_SCALE);
     let random = if tissue { settings.tissue_random_graphite.clamp(0., 1.) } else { 0. };
     // Smooth patches in physical paper coordinates, mixed with existing fine grain.
     // No input-time RNG: replay, saved strokes and repeated passes stay stable.

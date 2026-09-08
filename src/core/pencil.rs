@@ -577,7 +577,7 @@ impl Default for ToolSettings {
             auto_azimuth: true,
             mouse_pressure: 0.48,
             pen_pressure_gamma: 1.0,
-            flow: 1.0,
+            flow: 1.15,
             pencil_color_rgb: [104, 104, 104],
             particle_variation: 0.24,
             eraser_strength: 0.78,

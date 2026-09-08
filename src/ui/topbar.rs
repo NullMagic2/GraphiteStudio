@@ -1,5 +1,6 @@
 use super::action_icons::{labeled_button, ActionIcon};
 use eframe::egui;
+use graphite_studio::shortcuts::{hint,Command};
 
 use crate::core::paper::PaperTexturePreset;
 
@@ -63,6 +64,7 @@ impl PaperTextureChoice {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TopbarAction {
     None,
+    Shortcuts,
     PaperSettings,
     PencilGallery,
     NewCanvas { preset: CanvasPreset, dpi: f32 },
@@ -108,10 +110,10 @@ pub fn show_topbar(
     ui.horizontal_wrapped(|ui| {
         ui.menu_button("File", |ui| {
             for (label, command) in [
-                ("Open project…    Ctrl+O", TopbarAction::OpenProject),
-                ("Save project    Ctrl+S", TopbarAction::SaveProject),
+                (hint(ui.ctx(),"Open project…",Command::Open), TopbarAction::OpenProject),
+                (hint(ui.ctx(),"Save project",Command::Save), TopbarAction::SaveProject),
                 (
-                    "Save project as…    Ctrl+Shift+S",
+                    hint(ui.ctx(),"Save project as…",Command::SaveAs),
                     TopbarAction::SaveProjectAs,
                 ),
             ] {
@@ -122,6 +124,8 @@ pub fn show_topbar(
             }
         });
         ui.menu_button("Options", |ui| {
+            if ui.button("Keyboard shortcuts…").clicked() {action=TopbarAction::Shortcuts;ui.close();}
+            ui.separator();
             ui.set_max_width(320.);
             #[cfg(windows)]
             {
@@ -167,17 +171,17 @@ pub fn show_topbar(
         if labeled_button(ui,ActionIcon::PencilGallery,"Pencil gallery…").clicked() { action = TopbarAction::PencilGallery; }
         ui.separator();
         for (enabled,icon,label,command) in [
-            (can_undo,ActionIcon::Undo,"Undo (Ctrl+Z)",TopbarAction::Undo),
-            (can_redo,ActionIcon::Redo,"Redo (Ctrl+Y)",TopbarAction::Redo),
+            (can_undo,ActionIcon::Undo,hint(ui.ctx(),"Undo",Command::Undo),TopbarAction::Undo),
+            (can_redo,ActionIcon::Redo,hint(ui.ctx(),"Redo",Command::Redo),TopbarAction::Redo),
         ] {
-            if ui.add_enabled_ui(enabled,|ui|super::action_icons::button_sized(ui,icon,label,false,egui::Vec2::splat(44.))).inner.clicked() {
+            if ui.add_enabled_ui(enabled,|ui|super::action_icons::button_sized(ui,icon,&label,false,egui::Vec2::splat(44.))).inner.clicked() {
                 action=command;
             }
         }
         if labeled_button(ui,ActionIcon::Fit,"Fit to screen").on_hover_text("Center the whole drawing in the available canvas area. This changes only the view.").clicked() {
             action = TopbarAction::Fit;
         }
-        if labeled_button(ui,ActionIcon::Fullscreen,"Fullscreen").on_hover_text("Show the whole drawing without panels. Esc exits fullscreen.").clicked() {
+        if labeled_button(ui,ActionIcon::Fullscreen,"Fullscreen").on_hover_text(hint(ui.ctx(),"Leave fullscreen",Command::Cancel)).clicked() {
             action = TopbarAction::Fullscreen;
         }
         if super::action_icons::button(

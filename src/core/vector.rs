@@ -131,6 +131,37 @@ impl VectorStroke {
         }
         out
     }
+    pub fn mirrored(&self,center:eframe::egui::Pos2,horizontal:bool,tips:&mut std::collections::HashMap<usize,Arc<super::brush::BrushTip>>)->Self {
+        let mut out=self.clone();
+        let point=|p:Vec2|if horizontal {Vec2::new(2.*center.x-p.x,p.y)}else{Vec2::new(p.x,2.*center.y-p.y)};
+        let angle=|a:f32|((if horizontal {180.}else{0.})-a).rem_euclid(360.);
+        for p in &mut out.points {
+            let v=point(Vec2::new(p.x,p.y));p.x=v.x;p.y=v.y;
+            p.azimuth_deg=angle(p.azimuth_deg);p.rotation_deg=p.rotation_deg.map(|r|(-r).rem_euclid(360.));
+        }
+        out.settings.azimuth_deg=angle(out.settings.azimuth_deg);
+        out.settings.brush_angle_deg=angle(out.settings.brush_angle_deg);
+        out.tip.profile.orientation_deg=(-out.tip.profile.orientation_deg).rem_euclid(360.);
+        let n=out.tip.profile.resolution as usize;
+        for values in [&mut out.tip.profile.height,&mut out.tip.profile.pending_wear] {
+            if values.len()==n*n {for y in 0..n/2 {for x in 0..n {values.swap(y*n+x,(n-1-y)*n+x);}}}
+        }
+        for source in [&mut out.settings.pencil_texture,&mut out.settings.brush_tip] {
+            if let Some(original)=source {
+                let key=Arc::as_ptr(original) as usize;
+                *original=tips.entry(key).or_insert_with(||{
+                    let mut mirrored=(**original).clone();
+                    let w=mirrored.width as usize;let h=mirrored.height as usize;
+                    for y in 0..h/2 {for x in 0..w {mirrored.mask.swap(y*w+x,(h-1-y)*w+x);}}
+                    Arc::new(mirrored)
+                }).clone();
+            }
+        }
+        out.selection=Default::default();
+        out.selection.polygon=self.selection.polygon.iter().copied().map(point).collect();
+        out
+    }
+
     pub fn transformed(&self, from: Rect, to: Rect) -> Self {
         let mut out = self.clone();
         let scale = to.size() / from.size();

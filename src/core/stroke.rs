@@ -328,6 +328,7 @@ impl StrokeEngine {
         let pressure = point.pressure.clamp(0.0, 1.0);
         if pressure <= 1.0e-4
             || (settings.tool == ToolKind::Eraser && settings.eraser_strength <= 0.)
+            || (settings.tool == ToolKind::Pencil && settings.flow <= 0.)
         {
             return None;
         }
@@ -707,7 +708,7 @@ impl PreparedGraphiteTransfer {
         Self {
             formulation,
             sliding_mm,
-            wear_flow: formulation.wear_coefficient * flow.clamp(0.05, 2.),
+            wear_flow: formulation.wear_coefficient * flow.clamp(0., 2.),
             release_efficiency: 0.72
                 + 0.28 * super::contact::pencil_effective_pressure(pressure).powf(0.72),
             side_transfer: 1. + 0.36 * tilt * formulation.lubricity,
@@ -751,7 +752,9 @@ impl PreparedGraphiteTransfer {
             * 0.72;
         // Integrate finite-capacity deposition exponentially rather than allowing a
         // nonzero saturation floor to accumulate unbounded dark paint.
-        let amount = remaining * (1.0 - (-abrasion_work / capacity).exp());
+        // exp_m1 retains tiny deposits near saturation instead of subtracting
+        // two nearly equal floats and quantizing the contact threshold.
+        let amount = remaining * -(-abrasion_work / capacity).exp_m1();
 
         if amount <= 2.0e-6 {
             return false;

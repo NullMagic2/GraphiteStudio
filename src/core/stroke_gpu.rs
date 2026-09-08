@@ -232,6 +232,7 @@ impl GpuStroke {
             if s.tool == ToolKind::Eraser && s.eraser_strength <= 0. {
                 continue;
             }
+            if s.tool == ToolKind::Pencil && s.flow <= 0. { continue; }
             if s.tool == ToolKind::Tissue && (s.tissue_load <= 0. || s.flow <= 0.) {
                 continue;
             }
@@ -259,7 +260,7 @@ impl GpuStroke {
             a[10] = 0.70 + 0.05 * doc.paper.compliance();
             a[11] = 0.16 + 0.18 * load;
             a[12] = tilt;
-            a[13] = f.wear_coefficient * s.flow.clamp(0.05, 2.);
+            a[13] = f.wear_coefficient * s.flow.clamp(0., 2.);
             a[14] = 0.72 + 0.28 * load.powf(0.72);
             a[15] = 1. + 0.36 * tilt * f.lubricity;
             a[16] = travel * 25.4 / dpi;
@@ -305,7 +306,7 @@ impl GpuStroke {
                 ToolKind::Tissue => {
                     a[36] = 2.;
                     let size = s.tissue_size_px.clamp(0.1, 8192.) * (0.65 + 0.35 * pressure.sqrt());
-                    a[40] = pressure * s.flow * (s.tissue_load * 0.20) * travel / size.max(1.);
+                    a[40] = pressure * s.flow * (s.tissue_load * 0.20) * travel / (size.max(1.) * super::material::BUILDUP_SCALE);
                     a[41] = 4. / (size * size);
                     a[42] = s.tissue_random_graphite.clamp(0., 1.);
                     a[43] = 25.4 / (dpi * 3.);

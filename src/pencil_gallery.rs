@@ -1,9 +1,10 @@
 use crate::core::pencil::{ToolKind, ToolSettings};
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
+
+mod storage;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PencilPreset {
@@ -23,6 +24,14 @@ pub struct Gallery {
     pub pencils: Vec<PencilPreset>,
     #[serde(default)]
     pub collections: Vec<FolderCollection>,
+    #[serde(default)]
+    storage_version: u32,
+    #[serde(default)]
+    order: Vec<String>,
+    #[serde(skip)]
+    files: std::collections::BTreeMap<String, std::path::PathBuf>,
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 impl Gallery {
     pub fn ensure_ids(&mut self) -> bool {
@@ -35,8 +44,8 @@ impl Gallery {
         }
         changed
     }
-    /// Import files from the selected directory once. Collections embed their
-    /// tips; removal never changes the user's source directory or files.
+    /// Import the sampled tips once. Saving writes separate managed pencil files;
+    /// removing them never changes the user's original ABR directory or files.
     pub fn add_folder(&mut self, directory: &Path, settings: &ToolSettings) -> Result<String,String> {
         let source=directory.canonicalize().map_err(|e|e.to_string())?;
         let same_path=|a:&Path,b:&Path| if cfg!(windows) {a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())}else{a==b};
@@ -114,48 +123,6 @@ impl Gallery {
                 .sum::<usize>()
                 <= 64 * 1024 * 1024
     }
-    pub fn save(&self, path: &Path) -> Result<(), String> {
-        if !self.valid() {
-            return Err("Invalid pencil gallery.".into());
-        }
-        let temp = path.with_extension(format!("{}.tmp", std::process::id()));
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .map_err(|e| e.to_string())?;
-        let result = (|| -> Result<(), String> {
-            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
-            let mut writer = BufWriter::with_capacity(256 * 1024, encoder);
-            serde_json::to_writer(&mut writer, self).map_err(|e| e.to_string())?;
-            writer.flush().map_err(|e| e.to_string())?;
-            let encoder = writer.into_inner().map_err(|e| e.to_string())?;
-            let file = encoder.finish().map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
-            drop(file);
-            std::fs::rename(&temp, path).map_err(|e| e.to_string())
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temp);
-        }
-        result
-    }
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-        if file.metadata().map_err(|e| e.to_string())?.len() > 128 * 1024 * 1024 {
-            return Err("Gallery is too large.".into());
-        }
-        let decoder = flate2::read::GzDecoder::new(BufReader::new(file));
-        let gallery: Self = serde_json::from_reader(BufReader::with_capacity(
-            256 * 1024,
-            decoder.take(320 * 1024 * 1024),
-        ))
-        .map_err(|e| e.to_string())?;
-        if !gallery.valid() {
-            return Err("Invalid pencil gallery.".into());
-        }
-        Ok(gallery)
-    }
 }
 impl PencilPreset {
     pub fn apply(&self, target: &mut ToolSettings) {
@@ -213,12 +180,14 @@ mod tests {
         assert_eq!(restored.collections.len(),2);assert_eq!(restored.pencils[0].folder,b);
         assert_eq!(restored.pencils[0].settings.pencil_texture.as_ref().unwrap().mask,[0,128,255,90,90,90]);
         let legacy:Gallery=serde_json::from_str("{\"pencils\":[]}").unwrap();assert!(legacy.collections.is_empty());
+        for file in gallery.files.values(){std::fs::remove_file(file).unwrap();}
+        std::fs::remove_dir(Gallery::imports_path(&saved)).unwrap();
         for p in [first.join("One.abr"),second.join("Two.ABR"),empty.join("Bad.abr"),invalid.join("Bad.abr"),saved]{std::fs::remove_file(p).unwrap();}
         for p in [first,second,empty,invalid,root.join("one"),root.join("two"),root]{std::fs::remove_dir(p).unwrap();}
     }
 
     #[test]
-    fn gallery_persists_folders_embedded_tips_and_preserves_device_preferences() {
+    fn gallery_persists_separate_tips_and_preserves_device_preferences() {
         let mut g = Gallery::default();
         let mut s = ToolSettings::default();
         s.pencil_texture = Some(std::sync::Arc::new(crate::core::brush::BrushTip {
@@ -228,10 +197,9 @@ mod tests {
             mask: vec![0, 128, 200, 255],
         }));
         g.add("My pencil", "Sketches", &s).unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "graphite-gallery-test-{}.gallery",
-            std::process::id()
-        ));
+        let root=std::env::temp_dir().join(format!("graphite-gallery-{}",new_pencil_id()));
+        std::fs::create_dir(&root).unwrap();
+        let path=root.join("Pencils.gallery");
         g.save(&path).unwrap();
         let loaded = Gallery::load(&path).unwrap();
         assert_eq!(loaded.pencils[0].folder, "Sketches");
@@ -255,6 +223,9 @@ mod tests {
         g.pencils[0].name.clear();
         assert!(g.save(&path).is_err());
         assert_eq!(Gallery::load(&path).unwrap().pencils[0].name, "My pencil");
+        for file in g.files.values(){std::fs::remove_file(file).unwrap();}
+        std::fs::remove_dir(Gallery::imports_path(&path)).unwrap();
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

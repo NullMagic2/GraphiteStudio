@@ -115,6 +115,9 @@ impl EditTransaction {
                 !std::sync::Arc::ptr_eq(v, &document.layers[document.active_layer_index()].vectors)
             }))
         .then_some(HistoryEntry {
+            mirror: None,
+            copy: None,
+            merge: None,
             turn: None,
             layer_id,
             changes,
@@ -128,6 +131,9 @@ impl EditTransaction {
 
 #[derive(Debug, Clone)]
 struct HistoryEntry {
+    mirror: Option<bool>,
+    copy: Option<Box<super::layer_copy::LayerCopy>>,
+    merge: Option<Box<super::layer_merge::LayerMerge>>,
     turn: Option<bool>,
     vectors_before: std::sync::Arc<super::vector::VectorLayer>,
     vectors_after: std::sync::Arc<super::vector::VectorLayer>,
@@ -150,19 +156,29 @@ impl Default for History {
 
 impl History {
     fn rotate_state(&mut self, doc: &mut Document, clockwise: bool) {
-        let mut turn =
-            super::orientation::QuarterTurn::new(doc.spec.width_px, doc.spec.height_px, clockwise);
+        self.reorient_state(doc,super::orientation::QuarterTurn::new(doc.spec.width_px,doc.spec.height_px,clockwise));
+    }
+    fn mirror_state(&mut self,doc:&mut Document,horizontal:bool) {
+        self.reorient_state(doc,super::orientation::QuarterTurn::mirror(doc.spec.width_px,doc.spec.height_px,horizontal));
+    }
+    fn reorient_state(&mut self,doc:&mut Document,mut turn:super::orientation::QuarterTurn) {
         // Transform history before the live document so all original Arc identities stay alive
         // while the cache deduplicates shared vector paths and raster bases.
         for entry in self.undo.iter_mut().chain(&mut self.redo) {
-            if entry.turn.is_some() {
+            if let Some(copy)=&mut entry.copy {copy.rotate(&mut turn);continue;}
+            if let Some(merge) = &mut entry.merge { merge.rotate(&mut turn); continue; }
+            if let Some(clockwise)=&mut entry.turn {
+                if turn.reflection.is_some(){*clockwise=!*clockwise;}
+                continue;
+            }
+            if let Some(horizontal)=&mut entry.mirror {
+                if turn.reflection.is_none(){*horizontal=!*horizontal;}
                 continue;
             }
             for change in &mut entry.changes {
                 change.index = turn.index(change.index);
                 for pixel in [&mut change.before, &mut change.after] {
-                    pixel.orientation_x = -pixel.orientation_x;
-                    pixel.orientation_y = -pixel.orientation_y;
+                    (pixel.orientation_x,pixel.orientation_y)=turn.orientation(pixel.orientation_x,pixel.orientation_y);
                 }
             }
             entry.vectors_before = turn.layer(&entry.vectors_before);
@@ -174,6 +190,9 @@ impl History {
         self.redo.clear();
         self.rotate_state(doc, clockwise);
         self.undo.push(HistoryEntry {
+            mirror: None,
+            copy: None,
+            merge: None,
             turn: Some(clockwise),
             layer_id: doc.active_layer_id(),
             changes: Vec::new(),
@@ -190,6 +209,37 @@ impl History {
             redo: Vec::new(),
             max_entries: max_entries.max(1),
         }
+    }
+
+    pub fn merge_down(&mut self, doc: &mut Document) -> bool {
+        if !doc.can_merge_down() { return false; }
+        let upper=doc.active_layer_index();
+        self.merge_layers(doc, &[upper-1,upper])
+    }
+    pub fn copy_layer(&mut self,doc:&mut Document)->bool {
+        let Some(copy)=super::layer_copy::LayerCopy::prepare(doc) else{return false;};
+        if !copy.apply(doc,true){return false;}
+        self.redo.clear();
+        self.undo.push(HistoryEntry {mirror:None,copy:Some(Box::new(copy)),merge:None,turn:None,layer_id:doc.active_layer_id(),changes:Vec::new(),vectors_before:Default::default(),vectors_after:Default::default()});
+        if self.undo.len()>self.max_entries{self.undo.remove(0);}
+        true
+    }
+    pub fn mirror_document(&mut self,doc:&mut Document,horizontal:bool) {
+        self.redo.clear();self.mirror_state(doc,horizontal);
+        self.undo.push(HistoryEntry {mirror:Some(horizontal),copy:None,merge:None,turn:None,layer_id:doc.active_layer_id(),changes:Vec::new(),vectors_before:Default::default(),vectors_after:Default::default()});
+        if self.undo.len()>self.max_entries{self.undo.remove(0);}
+    }
+    pub fn merge_selected(&mut self, doc: &mut Document) -> bool {
+        let indices=doc.selected_layer_indices();
+        self.merge_layers(doc, &indices)
+    }
+    fn merge_layers(&mut self, doc: &mut Document, indices: &[usize]) -> bool {
+        let Some(merge) = super::layer_merge::LayerMerge::prepare(doc, indices) else { return false; };
+        if !merge.apply(doc, true) { return false; }
+        self.redo.clear();
+        self.undo.push(HistoryEntry { mirror: None, copy: None, merge: Some(Box::new(merge)), turn: None, layer_id: doc.active_layer_id(), changes: Vec::new(), vectors_before: Default::default(), vectors_after: Default::default() });
+        if self.undo.len() > self.max_entries { self.undo.remove(0); }
+        true
     }
     pub fn clear(&mut self) {
         self.undo.clear();
@@ -217,6 +267,18 @@ impl History {
         let Some(entry) = self.undo.pop() else {
             return false;
         };
+        if let Some(horizontal)=entry.mirror {
+            self.mirror_state(document,horizontal);self.redo.push(entry);return true;
+        }
+        if let Some(copy)=&entry.copy {
+            if !copy.apply(document,false){self.undo.push(entry);return false;}
+            self.redo.push(entry);return true;
+        }
+        if let Some(merge) = &entry.merge {
+            if !merge.apply(document, false) { self.undo.push(entry); return false; }
+            self.redo.push(entry);
+            return true;
+        }
         if let Some(clockwise) = entry.turn {
             self.rotate_state(document, !clockwise);
             self.redo.push(entry);
@@ -238,6 +300,18 @@ impl History {
         let Some(entry) = self.redo.pop() else {
             return false;
         };
+        if let Some(horizontal)=entry.mirror {
+            self.mirror_state(document,horizontal);self.undo.push(entry);return true;
+        }
+        if let Some(copy)=&entry.copy {
+            if !copy.apply(document,true){self.redo.push(entry);return false;}
+            self.undo.push(entry);return true;
+        }
+        if let Some(merge) = &entry.merge {
+            if !merge.apply(document, true) { self.redo.push(entry); return false; }
+            self.undo.push(entry);
+            return true;
+        }
         if let Some(clockwise) = entry.turn {
             self.rotate_state(document, clockwise);
             self.undo.push(entry);

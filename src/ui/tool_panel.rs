@@ -234,7 +234,13 @@ pub fn show_tool_panel(
                 device_orientation_seen,
             );
             ui.small("Pressure moves the contact down the tapered point: it changes both line width and graphite transfer. Tilt exposes the broad side facet. Supported pen rotation turns the worn tip independently.");
-            ui.add(egui::Slider::new(&mut settings.flow, 0.2..=1.6).text("Material flow"));
+            // Keep the stored transfer value for exact replay of older strokes.
+            // One opacity control replaces the former material-flow slider.
+            let mut opacity=settings.flow*50.;
+            let opacity_control=ui.add(egui::Slider::new(&mut opacity,0.0..=100.0).text("Opacity").suffix("%").max_decimals(1))
+                .on_hover_text("Pencil mark strength. 0% adds no marks; higher values lay down denser pigment. Pressure and paper texture still affect the stroke. Saved separately for each pencil.");
+            #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("pencil_opacity"),opacity_control.rect));
+            if opacity_control.changed(){settings.flow=opacity/50.;}
             ui.add(egui::Slider::new(&mut settings.tilt_deg, 0.0..=80.0).text("Tilt"));
             ui.add(egui::Slider::new(&mut settings.azimuth_deg, 0.0..=360.0).text("Azimuth"));
             ui.checkbox(&mut settings.auto_azimuth, "Auto azimuth from stroke direction")

@@ -14,6 +14,7 @@ pub(super) struct EditingState {
     action_pointer_down: bool,
 }
 pub(super) struct Transform {
+    flip: [bool;2],
     pub angle: f32,
     pub rotate_mode: bool,
     rotation_drag: Option<(f32, f32)>,
@@ -34,7 +35,37 @@ fn corners(r: Rect) -> [Pos2; 4] {
     ]
 }
 impl GraphiteApp {
+    pub(super) fn transform_dragging(&self)->bool {self.editing.transform.as_ref().is_some_and(|t|t.drag.is_some() || t.rotation_drag.is_some())}
+    pub(super) fn mirror_selection_or_document(&mut self,ctx:&egui::Context,horizontal:bool) {
+        self.finish_stroke();
+        if self.editing.transform.is_none() && self.editing.selected_path.is_none() && self.document.selection.polygon.is_empty() {
+            self.history.mirror_document(&mut self.document,horizontal);
+            self.tabs[self.active_tab].modified=true;
+            self.stroke_engine.clear_smudger();
+            self.status="Mirrored the whole drawing. Ctrl+Z restores it.".into();
+        }else{
+            self.begin_transform(ctx);
+            if let Some(t)=&mut self.editing.transform {t.flip[usize::from(!horizontal)]^=true;}
+            self.status="Mirrored selection. Checkmark keeps it; X restores the original.".into();
+        }
+        ctx.request_repaint();
+    }
+    pub(super) fn transform_scale_percent(&self)->Option<f32> {
+        let t=self.editing.transform.as_ref()?;
+        Some((t.target.area()/t.cutout.bounds.area().max(0.0001)).sqrt()*100.)
+    }
+
+    pub(super) fn set_transform_scale_percent(&mut self,percent:f32) {
+        let Some(current)=self.transform_scale_percent() else{return;};
+        if !percent.is_finite(){return;}
+        let t=self.editing.transform.as_mut().unwrap();
+        let factor=(percent.clamp(1.,400.)/current.max(0.0001))
+            .max(1./t.target.width().min(t.target.height()).max(0.0001));
+        t.target=Rect::from_center_size(t.target.center(),t.target.size()*factor);
+    }
+
     pub(super) fn select_tool(&mut self, tool: ToolKind) {
+        self.quick_controls.close_size();
         self.finish_stroke();
         self.cancel_transform_for_tool_change();
         self.shape_drag = None;
@@ -321,6 +352,7 @@ impl GraphiteApp {
         };
         let target = cutout.bounds;
         self.editing.transform = Some(Transform {
+            flip: [false,false],
             angle: 0.,
             rotate_mode: false,
             rotation_drag: None,
@@ -354,7 +386,7 @@ impl GraphiteApp {
             self.clear_edit_selection();
             return;
         };
-        if t.target == t.cutout.bounds && t.angle.abs() < 1e-6 {
+        if t.target == t.cutout.bounds && t.angle.abs() < 1e-6 && !t.flip.iter().any(|&f|f) {
             t.tx.rollback(&mut self.document);
             self.clear_edit_selection();
             return;
@@ -363,12 +395,11 @@ impl GraphiteApp {
         if let Some((original, selected)) = t.vectors {
             let mut changed = (*original).clone();
             let mut new_affected = Rect::NOTHING;
+            let mut mirrored_tips=std::collections::HashMap::new();
             for index in selected {
-                changed.strokes[index] = Arc::new(
-                    original.strokes[index]
-                        .transformed(t.cutout.bounds, t.target)
-                        .rotated(t.target.center(), t.angle),
-                );
+                let mut stroke=original.strokes[index].transformed(t.cutout.bounds,t.target);
+                for (axis,flip) in t.flip.iter().enumerate(){if *flip {stroke=stroke.mirrored(t.target.center(),axis==0,&mut mirrored_tips);}}
+                changed.strokes[index]=Arc::new(stroke.rotated(t.target.center(),t.angle));
                 new_affected =
                     new_affected.union(changed.strokes[index].bounds(self.document.spec.dpi));
             }
@@ -378,7 +409,7 @@ impl GraphiteApp {
             self.document.layers[active].vectors = Arc::new(changed);
         } else {
             t.cutout
-                .place_rotated(&mut self.document, t.target, t.angle, &mut t.tx);
+                .place_transformed(&mut self.document, t.target, t.angle,t.flip, &mut t.tx);
             self.bake_paths();
         }
         self.clear_edit_selection();
@@ -525,7 +556,7 @@ impl GraphiteApp {
             ]) {
                 mesh.vertices.push(egui::epaint::Vertex {
                     pos,
-                    uv,
+                    uv:Pos2::new(if t.flip[0]{1.-uv.x}else{uv.x},if t.flip[1]{1.-uv.y}else{uv.y}),
                     color: Color32::WHITE,
                 });
             }
@@ -607,19 +638,19 @@ impl GraphiteApp {
     }
     pub(super) fn editing_shortcuts(&mut self, ui: &egui::Ui) -> bool {
         let key = ui.input_mut(|i| {
-            if i.consume_key(egui::Modifiers::CTRL, egui::Key::R) {
+            if self.shortcuts.bindings.consume(i,Command::RotateSelection) {
                 7
-            } else if i.consume_key(egui::Modifiers::CTRL, egui::Key::T) {
+            } else if self.shortcuts.bindings.consume(i,Command::Transform) {
                 1
-            } else if i.consume_key(egui::Modifiers::CTRL, egui::Key::D) {
+            } else if self.shortcuts.bindings.consume(i,Command::Deselect) {
                 2
-            } else if i.consume_key(egui::Modifiers::CTRL, egui::Key::A) {
+            } else if self.shortcuts.bindings.consume(i,Command::SelectAll) {
                 3
-            } else if i.key_pressed(egui::Key::Escape) {
+            } else if self.shortcuts.bindings.consume(i,Command::Cancel) {
                 4
-            } else if i.key_pressed(egui::Key::Enter) {
+            } else if self.shortcuts.bindings.consume(i,Command::Confirm) {
                 5
-            } else if i.key_pressed(egui::Key::Delete) {
+            } else if self.shortcuts.bindings.consume(i,Command::Delete) {
                 6
             } else {
                 0
@@ -678,6 +709,19 @@ impl GraphiteApp {
         self.document.layers[active].vectors = Arc::new(VectorLayer::raster_base(&self.document));
         self.editing.selected_path = None;
     }
+    pub(super) fn mirror_controls(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for (horizontal,icon,label) in [
+                (true,crate::ui::action_icons::ActionIcon::MirrorHorizontal,"Mirror horizontal"),
+                (false,crate::ui::action_icons::ActionIcon::MirrorVertical,"Mirror vertical")
+            ] {
+                if crate::ui::action_icons::labeled_button(ui,icon,label)
+                    .on_hover_text("Mirror the selection, or the whole drawing when nothing is selected. Undo restores the original.").clicked() {
+                    self.mirror_selection_or_document(ui.ctx(),horizontal);
+                }
+            }
+        });
+    }
     pub(super) fn path_controls(&mut self, ui: &mut egui::Ui) {
         let layer = self.document.layers[self.document.active_layer_index()]
             .vectors
@@ -701,7 +745,8 @@ impl GraphiteApp {
         });
     }
     pub(super) fn show_guide(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Tool guide").fade_in(false).fade_out(false).default_pos(Pos2::new(90.,90.)).open(&mut self.editing.guide).default_width(440.).show(ctx,|ui|{
+          egui::Window::new("Tool guide").fade_in(false).fade_out(false).default_pos(Pos2::new(90.,90.)).open(&mut self.editing.guide).default_width(440.).show(ctx,|ui|{
+              ui.small("This guide lists default keys. Your current assignments are in Options → Keyboard shortcuts.");
             for (name,help) in [
                 ("Pencil","Draw graphite with pressure and tilt. Hold the tip still for about 0.65 seconds to straighten the stroke, adjust its endpoint, then lift. Disable Hold to straighten in Pencil controls if preferred. Line smoothing reduces wobble; 0% switches it off."),
                 ("Pencil gallery / ABR","Open Pencil gallery to import ABR tips, save current pencil settings, and organize named pencils in folders. Imported samples become graphite contact relief with the pencil's pressure, tilt and paper response. Photoshop stamp dynamics and computed brushes are not imported."),
@@ -722,6 +767,84 @@ impl GraphiteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mirror_buttons_are_only_shown_with_transform_controls() {
+        let mut a=app();let ctx=egui::Context::default();
+        for tool in [ToolKind::VectorSelect,ToolKind::Pencil,ToolKind::Lasso,ToolKind::Eraser,ToolKind::Smudge,ToolKind::Tissue,ToolKind::Shapes] {
+            a.select_tool(tool);
+            for _ in 0..3 {
+                for label in ["Mirror horizontal","Mirror vertical"] {
+                    ctx.data_mut(|d|d.remove::<Rect>(egui::Id::new(("test_action_icon",label))));
+                }
+                interface_frame(&mut a,&ctx,vec![]);
+            }
+            for label in ["Mirror horizontal","Mirror vertical"] {
+                let visible=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new(("test_action_icon",label))).is_some());
+                assert_eq!(visible,matches!(tool,ToolKind::VectorSelect|ToolKind::Lasso),"{label} for {tool:?}");
+            }
+        }
+        a.select_tool(ToolKind::Pencil);
+        draw(&mut a,&ctx,Pos2::new(35.,55.),Pos2::new(90.,65.));
+        a.begin_transform(&ctx);
+        assert!(a.editing.transform.is_some());
+        for _ in 0..3 {interface_frame(&mut a,&ctx,vec![]);}
+        assert!(ctx.data(|d|d.get_temp::<Rect>(egui::Id::new(("test_action_icon","Mirror horizontal"))).is_some()));
+    }
+    #[test]
+    fn copy_layer_button_retains_paths_opacity_and_independent_edits() {
+        let mut a=app();let ctx=egui::Context::default();
+        draw(&mut a,&ctx,Pos2::new(35.,55.),Pos2::new(90.,65.));
+        a.document.layers[0].opacity=137;
+        let original=a.document.layers[0].vectors.clone();let source=a.document.active_layer_id();
+        let material=a.document.surface.graphite_mass.clone();
+        for _ in 0..3 {interface_frame(&mut a,&ctx,vec![]);}
+        let button=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new(("test_action_icon","Copy layer"))).unwrap());
+        click_interface(&mut a,&ctx,button.center());
+        assert_eq!(a.document.layer_count(),2);assert_eq!(a.document.active_layer_index(),1);
+        assert_ne!(a.document.active_layer_id(),source);
+        assert_eq!(a.document.layers[1].opacity,137);
+        assert_eq!(a.document.layers[1].blend_mode,a.document.layers[0].blend_mode);
+        assert!(Arc::ptr_eq(&a.document.layers[1].vectors,&original));
+        assert_eq!(a.document.surface.graphite_mass,material);
+        draw(&mut a,&ctx,Pos2::new(35.,80.),Pos2::new(85.,95.));
+        assert_eq!(a.document.layers[0].vectors.strokes.len(),1);
+        assert_eq!(a.document.layers[1].vectors.strokes.len(),2);
+        assert!(a.history.undo(&mut a.document));assert!(a.history.undo(&mut a.document));
+        assert_eq!(a.document.layer_count(),1);assert_eq!(a.document.active_layer_id(),source);
+        assert_eq!(a.document.surface.graphite_mass,material);
+        assert!(a.history.redo(&mut a.document));assert_eq!(a.document.layers[1].vectors.strokes.len(),1);
+        assert!(a.history.redo(&mut a.document));assert_eq!(a.document.layers[1].vectors.strokes.len(),2);
+    }
+    #[test]
+    fn mirror_selection_and_scale_preserve_other_paths_and_cancel_cleanly() {
+        for pixels in [false,true] {for horizontal in [false,true] {
+            let mut a=app();let ctx=egui::Context::default();
+            draw(&mut a,&ctx,Pos2::new(35.,55.),Pos2::new(90.,65.));
+            draw(&mut a,&ctx,Pos2::new(40.,95.),Pos2::new(105.,110.));
+            let original=a.document.layers[0].vectors.clone();
+            let before=a.renderer.rgba8(&a.document);
+            a.editing.selected_path=Some(0);
+            if pixels {a.document.selection.set(vec![Vec2::new(20.,35.),Vec2::new(115.,35.),Vec2::new(115.,80.),Vec2::new(20.,80.)],a.document.spec.width_px,a.document.spec.height_px);}
+            a.begin_transform(&ctx);
+            let old=a.editing.transform.as_ref().unwrap().target;
+            a.set_transform_scale_percent(150.);
+            let target=a.editing.transform.as_ref().unwrap().target;
+            assert!((target.width()/old.width()-1.5).abs()<0.0001);assert_eq!(target.center(),old.center());
+            a.set_transform_scale_percent(100.);
+            a.mirror_selection_or_document(&ctx,horizontal);
+            assert!(a.editing.transform.as_ref().unwrap().flip[usize::from(!horizontal)]);
+            a.confirm_transform_and_deselect();
+            assert!(a.editing.transform.is_none() && a.document.selection.polygon.is_empty());
+            if !pixels {
+                assert!(Arc::ptr_eq(&original.strokes[1],&a.document.layers[0].vectors.strokes[1]));
+                let p=a.document.layers[0].vectors.strokes[0].points[0];let start=original.strokes[0].points[0];
+                if horizontal {assert!((p.x-(2.*old.center().x-start.x)).abs()<0.001);}else{assert!((p.y-(2.*old.center().y-start.y)).abs()<0.001);}
+            }
+            assert!(a.history.undo(&mut a.document));assert_eq!(a.renderer.rgba8(&a.document),before);
+            a.editing.selected_path=Some(0);a.mirror_selection_or_document(&ctx,horizontal);
+            a.cancel_transform_and_deselect();assert_eq!(a.renderer.rgba8(&a.document),before);
+        }}
+    }
     fn interface_frame(a: &mut GraphiteApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
         ctx.run_ui(egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440., 920.))),
@@ -766,6 +889,82 @@ mod tests {
             assert!(a.history.undo(&mut a.document));
             assert!(a.document.surface.graphite_mass.iter().all(|&m| m == 0.));
         }}
+    }
+
+    #[test]
+    fn merge_button_preserves_artwork_and_undo_restores_layers_and_editable_paths() {
+        let mut a = app(); let ctx = egui::Context::default();
+        draw(&mut a, &ctx, Pos2::new(35., 65.), Pos2::new(160., 85.));
+        a.handle_layer_panel_action(LayerPanelAction::Add);
+        draw(&mut a, &ctx, Pos2::new(55., 80.), Pos2::new(170., 90.));
+        let before = a.renderer.rgba8(&a.document);
+        let paths: Vec<_> = a.document.layers.iter().map(|l| l.vectors.clone()).collect();
+        for _ in 0..3 { interface_frame(&mut a, &ctx, vec![]); }
+        let rect = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("test_merge_down")).unwrap());
+        click_interface(&mut a, &ctx, rect.center());
+        assert_eq!(a.document.layer_count(), 1);
+        let merged = a.renderer.rgba8(&a.document);
+        assert!(before.iter().zip(&merged).all(|(&a,&b)| a.abs_diff(b)<=1));
+        assert!(a.document.layers[0].vectors.strokes.is_empty());
+        assert!(a.history.undo(&mut a.document));
+        assert_eq!(a.document.layer_count(), 2);
+        assert_eq!(before, a.renderer.rgba8(&a.document));
+        for (l,p) in a.document.layers.iter().zip(&paths) { assert!(Arc::ptr_eq(&l.vectors,p)); }
+        assert!(a.history.redo(&mut a.document));
+        draw(&mut a, &ctx, Pos2::new(45., 130.), Pos2::new(130., 150.));
+        assert_ne!(merged, a.renderer.rgba8(&a.document));
+        assert!(a.history.undo(&mut a.document));
+        assert_eq!(merged, a.renderer.rgba8(&a.document));
+        assert!(a.history.undo(&mut a.document));
+        assert_eq!(before, a.renderer.rgba8(&a.document));
+        assert!(a.history.undo(&mut a.document));
+        assert!(a.document.layers[1].vectors.strokes.is_empty());
+    }
+
+    #[test]
+    fn multiple_layer_selection_and_merge_work_with_ctrl_shift_and_touch_controls() {
+        for method in 0..3 {
+            let mut a=app(); let ctx=egui::Context::default();
+            for l in 0..4 {
+                if l>0 {a.handle_layer_panel_action(LayerPanelAction::Add);}
+                draw(&mut a,&ctx,Pos2::new(35.,60.+l as f32*20.),Pos2::new(160.,80.+l as f32*20.));
+            }
+            let before=a.renderer.rgba8(&a.document);
+            let paths:Vec<_>=a.document.layers.iter().map(|l|l.vectors.clone()).collect();
+            a.tabs[a.active_tab].modified=false;
+            let click=|a:&mut GraphiteApp,id:egui::Id,modifiers:egui::Modifiers| {
+                for _ in 0..2 {interface_frame(a,&ctx,vec![]);}
+                let pos=ctx.data(|d|d.get_temp::<Rect>(id).unwrap().center());
+                for pressed in [true,false] {
+                    let _=ctx.run_ui(egui::RawInput { screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(1440.,920.))),modifiers,
+                        events:vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed,modifiers}],..Default::default() },|ui|a.interface(ui));
+                }
+            };
+            if method==2 {
+                click(&mut a,egui::Id::new("test_layer_multiple"),Default::default());
+                for id in 1..=3 {click(&mut a,egui::Id::new(("test_layer_rect",id as u64)),Default::default());}
+            } else {
+                click(&mut a,egui::Id::new(("test_layer_rect",1u64)),Default::default());
+                if method==1 {click(&mut a,egui::Id::new(("test_layer_rect",4u64)),egui::Modifiers::SHIFT);}
+                else {for id in [3u64,2,4] {click(&mut a,egui::Id::new(("test_layer_rect",id)),egui::Modifiers::CTRL);}}
+            }
+            assert_eq!(a.document.selected_layer_indices(),vec![0,1,2,3]);
+            assert!(!a.tabs[a.active_tab].modified,"Selecting layers must not dirty the drawing");
+            if method==2 {
+                let mut preview=crate::ui::test_render::Preview::default();
+                let mut view=app();view.document=a.document.clone();view.settings=a.settings.clone();
+                let view_ctx=egui::Context::default();
+                for pass in 0..3 {let out=interface_frame(&mut view,&view_ctx,vec![]);preview.update(&out);if pass==2 {preview.save(&view_ctx,&out,"../../ui-v241-layer-selection.png",[1440,920]);}}
+            }
+            click(&mut a,egui::Id::new("test_merge_down"),Default::default());
+            assert_eq!(a.document.layer_count(),1);assert!(a.tabs[a.active_tab].modified);
+            assert!(before.iter().zip(a.renderer.rgba8(&a.document)).all(|(&a,b)|a.abs_diff(b)<=1));
+            assert!(a.history.undo(&mut a.document));assert_eq!(a.document.layer_count(),4);
+            assert_eq!(a.document.selected_layer_indices(),vec![0,1,2,3]);
+            assert_eq!(a.renderer.rgba8(&a.document),before);
+            for (layer,path) in a.document.layers.iter().zip(paths) {assert!(Arc::ptr_eq(&layer.vectors,&path));}
+            assert!(a.history.redo(&mut a.document));assert_eq!(a.document.layer_count(),1);
+        }
     }
 
     #[test]
@@ -1371,8 +1570,9 @@ mod tests {
         a.viewport.rotation = 0.64;
         a.handle_topbar_action(TopbarAction::Fullscreen);
         let mut preview = crate::ui::test_render::Preview::default();
+        let fullscreen_ctx=egui::Context::default();
         for pass in 0..3 {
-            let output = ctx.run_ui(
+            let output = fullscreen_ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200., 800.))),
                     ..Default::default()
@@ -1387,7 +1587,7 @@ mod tests {
                     .any(|c| matches!(c, egui::ViewportCommand::Fullscreen(true)))));
             }
             if pass == 2 {
-                preview.save(&ctx, &output, "../../ui-v21-fullscreen.png", [1200, 800]);
+                preview.save(&fullscreen_ctx, &output, "../../ui-v21-fullscreen.png", [1200, 800]);
             }
         }
         assert!(a.fullscreen && a.fullscreen_applied);

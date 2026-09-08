@@ -156,6 +156,9 @@ impl Cutout {
         angle: f32,
         tx: &mut EditTransaction,
     ) {
+        self.place_transformed(doc,target,angle,[false,false],tx);
+    }
+    pub fn place_transformed(&self,doc:&mut Document,target:Rect,angle:f32,flip:[bool;2],tx:&mut EditTransaction) {
         let mut bounds = Rect::NOTHING;
         for p in [
             target.left_top(),
@@ -178,10 +181,10 @@ impl Cutout {
                     target.center(),
                     -angle,
                 );
-                let mut p = self.sample(
-                    (local.x - target.min.x) / target.width() * self.width as f32 - 0.5,
-                    (local.y - target.min.y) / target.height() * self.height as f32 - 0.5,
-                );
+                let mut uv=(local-target.min)/target.size();
+                if flip[0]{uv.x=1.-uv.x;}if flip[1]{uv.y=1.-uv.y;}
+                let mut p = self.sample(uv.x*self.width as f32-0.5,uv.y*self.height as f32-0.5);
+                if flip[0]!=flip[1]{p.orientation_y=-p.orientation_y;}
                 if p.total_deposit() <= 1e-10 {
                     continue;
                 }

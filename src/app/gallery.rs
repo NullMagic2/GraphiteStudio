@@ -36,13 +36,14 @@ mod tests {
             screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(1440.,920.))),events,..Default::default()
         },|ui|a.interface(ui));
         for _ in 0..3{frame(&mut a,vec![]);}
-        for (key,x) in [("pencil_width_response",25.),("pencil_line_smoothing",72.)] {
+        for (key,x) in [("pencil_width_response",25.),("pencil_line_smoothing",72.),("pencil_opacity",20.)] {
             let rect=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new(key)).unwrap());
             let pos=Pos2::new(rect.left()+x,rect.center().y);
             for pressed in [true,false] {frame(&mut a,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
         }
         assert_ne!(a.settings.pressure_width,0.6);
         assert!(a.settings.line_smoothing>0.);
+        assert!(a.settings.flow<1.15,"Opacity slider must change the saved pencil mark strength");
         let saved=PencilControls::capture(&a.settings,a.tip_state.profile.orientation_deg);
         assert_eq!(a.gallery.preferences.pencils[&first],saved,"Real slider events must queue automatic persistence");
         a.activate_gallery_pencil(a.gallery_preset(2));
@@ -208,11 +209,12 @@ fn path() -> Option<std::path::PathBuf> {
 }
 impl GalleryUi {
     pub fn load(&mut self) {
-        if let Some(path) = path().filter(|p| p.exists()) {
+        if let Some(path) = path() {
             match Gallery::load(&path) {
                 Ok(mut data) => {
                     let migrated=data.ensure_ids();
                     self.data=data;
+                    self.message=self.data.warnings.join("\n");
                     if migrated {
                         if let Err(e)=self.data.save(&path) {self.message=e;self.preferences_blocked=true;}
                     }
@@ -237,7 +239,8 @@ impl GalleryUi {
     }
     pub fn persist(&mut self) {
         if !self.preferences_blocked {
-            self.preferences.pencils.retain(|id,_|id=="standard" || self.data.pencils.iter().any(|p|&p.id==id));
+            // Retain controls for temporarily removed brush files so replacing
+            // the same detected pencil restores its independent preferences.
             for pencil in &self.data.pencils {
                 self.preferences.pencils.entry(pencil.id.clone()).or_insert_with(||PencilControls::capture(&pencil.settings,0.));
             }
@@ -337,6 +340,21 @@ impl GraphiteApp {
     }
     pub(super) fn open_pencil_gallery(&mut self) {
         self.finish_stroke();
+        #[cfg(not(test))]
+        if let Some(path)=path() {
+            match Gallery::load(&path) {
+                Ok(data)=>{
+                    let active_removed=self.gallery.data.pencils.iter().any(|p|p.id==self.settings.pencil_id)
+                        && !data.pencils.iter().any(|p|p.id==self.settings.pencil_id);
+                    self.gallery.message=data.warnings.join("\n");
+                    self.gallery.data=data;
+                    self.gallery.selected=None;
+                    self.gallery.previews.clear();
+                    if active_removed {self.activate_gallery_pencil(self.gallery_preset(0));}
+                },
+                Err(error)=>self.gallery.message=format!("Cannot refresh imported_brushes: {error}"),
+            }
+        }
         self.paper_settings.open = false;
         self.gallery.open = true;
     }
@@ -345,13 +363,16 @@ impl GraphiteApp {
         tips: &[std::sync::Arc<crate::core::brush::BrushTip>],
         folder: &str,
     ) -> Result<(), String> {
-        let first=self.gallery.data.pencils.len()+1;
+        let first=self.gallery.data.pencils.len();
         let mut next = self.gallery.data.clone();
         for tip in tips {
             let mut settings = self.settings.clone();
             settings.pencil_texture = Some(tip.clone());
             next.add(&tip.name, folder, &settings)?;
         }
+        let first_id=next.pencils.get(first).map(|p|p.id.clone());
+        #[cfg(not(test))]
+        next.save(&path().ok_or("No gallery location.")?)?;
         self.gallery.data = next;
         self.gallery.folder = folder.trim().chars().take(100).collect();
         self.gallery.edit_folder = self.gallery.folder.clone();
@@ -360,7 +381,9 @@ impl GraphiteApp {
         self.gallery.previews.clear();
         self.gallery.persist();
         self.open_pencil_gallery();
-        if !tips.is_empty(){self.activate_gallery_pencil(self.gallery_preset(first));}
+        if let Some(key)=first_id.and_then(|id|self.gallery.data.pencils.iter().position(|p|p.id==id).map(|i|i+1)) {
+            self.activate_gallery_pencil(self.gallery_preset(key));
+        }
         Ok(())
     }
     pub(super) fn show_pencil_gallery(&mut self, ctx: &egui::Context) {
@@ -399,7 +422,7 @@ impl GraphiteApp {
                     add_folder=ui.add_sized([130.,44.],egui::Button::new("Add folder…")).on_hover_text("Choose a folder and import its ABR files as a collection.").clicked();
                     let delete=ui.add_enabled(!self.gallery.folder.is_empty(),egui::Button::new("Delete folder"));
                     #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("gallery_delete_folder"),delete.rect));
-                    delete_folder=delete.on_hover_text("Remove the selected collection and its gallery pencils. Files on disk and existing strokes are kept.").clicked();
+                    delete_folder=delete.on_hover_text("Remove this collection and its managed imported_brushes files. Original ABRs and existing strokes are kept.").clicked();
                 });
                 let mut folders: Vec<_> = self
                     .gallery
@@ -562,9 +585,10 @@ impl GraphiteApp {
                                 self.gallery.selected = Some(self.gallery.data.pencils.len());
                                 let key=self.gallery.data.pencils.len();
                                 let id=self.gallery.data.pencils[key-1].id.clone();
-                                self.gallery.preferences.pencils.insert(id,PencilControls::capture(&self.settings,self.tip_state.profile.orientation_deg));
+                                self.gallery.preferences.pencils.insert(id.clone(),PencilControls::capture(&self.settings,self.tip_state.profile.orientation_deg));
                                 self.gallery.persist();
-                                use_pencil=Some(self.gallery_preset(key));
+                                self.gallery.selected=self.gallery.data.pencils.iter().position(|p|p.id==id).map(|i|i+1);
+                                use_pencil=self.gallery.selected.map(|key|self.gallery_preset(key));
                             }
                             Err(e) => self.gallery.message = e,
                         }
@@ -590,6 +614,7 @@ impl GraphiteApp {
                         }
                     }
                 });
+                ui.small("Imported pencils: imported_brushes beside the app. Reopen this gallery to detect changed .pencil files.");
                 ui.small(&self.gallery.message);
             });
         self.gallery.open = open && !done;

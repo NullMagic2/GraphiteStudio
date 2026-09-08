@@ -144,9 +144,20 @@ impl DrawingLayer {
 fn full_layer_opacity() -> u8 {
     255
 }
+fn full_paper_texture_opacity()->f32 {1.}
+
+#[derive(Debug, Clone, Default)]
+pub struct LayerSelection {
+    pub ids: Vec<u64>,
+    pub anchor: Option<u64>,
+    pub multiple: bool,
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Document {
+    /// Workspace selection is per drawing and never part of the saved artwork.
+    #[serde(skip)]
+    pub layer_selection: LayerSelection,
     pub selection: super::selection::Selection,
     pub spec: CanvasSpec,
     pub paper: PaperPreset,
@@ -156,6 +167,8 @@ pub struct Document {
     pub paper_albedo: Vec<[f32; 3]>,
     /// User-selected tint multiplied with the unchanged paper texture.
     pub paper_color_rgb: [u8; 3],
+    #[serde(default = "full_paper_texture_opacity")]
+    pub paper_texture_opacity: f32,
     /// Stable multiscale pigment variation, precomputed outside the stroke hot path.
     pub color_grain: Vec<u8>,
     pub surface: SurfaceState,
@@ -186,11 +199,13 @@ impl Document {
             generate_contact_response(width, height, paper, &rest_height, &fiber);
         Self {
             color_grain: super::paper::generate_color_grain(width, height, spec.dpi),
+            layer_selection: Default::default(),
             selection: Default::default(),
             spec,
             paper,
             paper_texture_label: paper_texture_label.into(),
             paper_color_rgb: [255; 3],
+            paper_texture_opacity: 1.,
             paper_albedo,
             surface: SurfaceState::from_paper(rest_height, fiber, contact_support, edge_grain),
             layers: vec![DrawingLayer::new(1, "Layer 1", width, height)],
@@ -221,6 +236,47 @@ impl Document {
         self.layers.len()
     }
 
+    pub fn can_merge_down(&self) -> bool {
+        self.active_layer > 0 && self.layers[self.active_layer].visible && self.layers[self.active_layer - 1].visible
+    }
+
+    pub fn selected_layer_indices(&self) -> Vec<usize> {
+        let mut selected: Vec<_> = self.layers.iter().enumerate()
+            .filter_map(|(i,l)| self.layer_selection.ids.contains(&l.id).then_some(i)).collect();
+        if selected.is_empty() { selected.push(self.active_layer); }
+        selected
+    }
+
+    pub fn can_merge_selected(&self) -> bool {
+        let indices = self.selected_layer_indices();
+        indices.len() >= 2 && indices.iter().all(|&i| self.layers[i].visible)
+    }
+
+    pub fn select_layer(&mut self, index: usize, toggle: bool, range: bool) {
+        if index >= self.layers.len() { return; }
+        let id = self.layers[index].id;
+        let mut ids: Vec<_> = self.selected_layer_indices().into_iter().map(|i| self.layers[i].id).collect();
+        if range {
+            let anchor = self.layer_selection.anchor.and_then(|id| self.layers.iter().position(|l| l.id==id)).unwrap_or(self.active_layer);
+            if !toggle { ids.clear(); }
+            for i in anchor.min(index)..=anchor.max(index) {
+                if !ids.contains(&self.layers[i].id) { ids.push(self.layers[i].id); }
+            }
+            if self.layer_selection.anchor.is_none() { self.layer_selection.anchor = Some(self.layers[anchor].id); }
+        } else if toggle {
+            if ids.contains(&id) {
+                if ids.len()>1 { ids.retain(|&i| i!=id); }
+            } else { ids.push(id); }
+            self.layer_selection.anchor = Some(id);
+        } else {
+            ids = vec![id];
+            self.layer_selection.anchor = Some(id);
+        }
+        let active = if ids.contains(&id) { id } else if ids.contains(&self.active_layer_id()) { self.active_layer_id() } else { *ids.last().unwrap() };
+        self.layer_selection.ids = ids;
+        self.activate_layer_by_id(active);
+    }
+
     pub fn set_paper_texture(&mut self, label: impl Into<String>, albedo: Vec<[f32; 3]>) {
         if albedo.len() == self.spec.pixel_count() {
             self.paper_texture_label = label.into();
@@ -236,6 +292,12 @@ impl Document {
         self.paper_color_rgb = color;
         self.mark_all_dirty();
         true
+    }
+    pub fn set_paper_texture_opacity(&mut self,opacity:f32)->bool {
+        if !opacity.is_finite(){return false;}
+        let opacity=opacity.clamp(0.,1.);
+        if self.paper_texture_opacity==opacity{return false;}
+        self.paper_texture_opacity=opacity;self.mark_all_dirty();true
     }
 
     /// Switch active layers. The active layer remains in dense arrays for fast stroke simulation;

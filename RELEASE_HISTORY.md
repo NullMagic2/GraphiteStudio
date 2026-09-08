@@ -5,6 +5,14 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.24.7](#v0247)
+- [v0.24.6](#v0246)
+- [v0.24.5](#v0245)
+- [v0.24.4](#v0244)
+- [v0.24.3](#v0243)
+- [v0.24.2](#v0242)
+- [v0.24.1](#v0241)
+- [v0.24.0](#v0240)
 - [v0.23.9](#v0239)
 - [v0.23.8](#v0238)
 - [v0.23.7](#v0237)
@@ -66,6 +74,72 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.24.7
+
+- Simplified the size popup to one row with the slider and numeric size. Removed its tool title and close button.
+- Pressing Shift (or the configured Ctrl/Alt modifier) opens and focuses the slider. Releasing the key keeps the popup open. Clicking outside dismisses it, and the dismissal contact is consumed through release so it cannot leave an accidental mark. Escape also dismisses the popup. The fullscreen Size button uses the same behavior.
+- All 80 application tests pass. Regression coverage includes physical left/right modifier events, a press and release delivered in one frame, adjusting without a held modifier, outside mouse/pen dismissal, ordinary shortcut chords, fullscreen toolbar interactions and widget focus. The compact popup was rendered and visually checked.
+
+## v0.24.6
+
+- Fixed the held size slider failing to appear on physical keyboards. egui 0.35 emits left/right modifier presses as key events; the chord guard incorrectly treated the activating Shift (or configured Ctrl/Alt) as an extra shortcut key and blocked the entire hold. Both sides of the configured modifier now activate the slider, while other shortcut keys still suppress it until release.
+- Added a regression test using the physical modifier events emitted by the native input adapter. It failed on ShiftLeft before the fix and passes for left/right Shift, Ctrl and Alt after the fix. All four quick-controls tests pass, covering held/released keys, real chords, slider interaction, widget focus and prevention of accidental drawing. The earlier modifier-only tests did not cover native key events.
+
+## v0.24.5
+
+- Added Options → Keyboard shortcuts… with key recording, conflict detection, Clear, Restore defaults, Save and Cancel. Assignments persist in portable `shortcuts.settings`, separately from drawings. Tools, editing, files, history, drawing zoom, pan and window recovery use the selected bindings; Fit and Fullscreen can also be assigned. File-menu labels and principal tool/transform hints follow custom assignments. The tool guide explicitly lists default keys.
+- The default held size modifier is now **Shift**. The shortcut editor can change it to Ctrl, Alt or Disabled. Shift sizing works after actual tool clicks, opens without a second key and dismisses on release. Shapes, view rotation, active strokes and active transform drags retain their existing Shift behavior instead of opening the popup.
+- Shortcut recording blocks drawing and command execution, including while fullscreen. Conflicts and file errors keep the editor open without silently applying changes. The package excludes personal shortcut settings.
+- Validation: all 202 regression tests pass, including preference round trips, duplicate detection, modifier matching, actual key recording and dispatch after reassignment, and held-Shift sizing after selecting Pencil/Eraser/Smudge/Tissue with pointer clicks. Tests check release cleanup and no accidental marks. Existing shape snapping and transform tests also pass. Shortcut and size popups were rendered for visual inspection.
+
+## v0.24.4
+
+- Mirror horizontal/vertical appear only alongside transform controls: an active transform, Vector selection or Free selection. Ordinary drawing tools no longer show these buttons.
+- Holding Ctrl opens the size slider even after a button or slider has retained keyboard focus. Actual text editing and modal dialogs still suppress the shortcut; Ctrl keyboard combinations remain available, and releasing Ctrl dismisses the popup.
+- Fullscreen now has a collapse/reopen arrow on its floating toolbar and a separate 48 px X button at the top right to leave fullscreen by mouse or touch. The exit button remains available with the toolbar collapsed; collapsing closes its Size popup.
+- Validation: 57 application regression tests passed for mirror visibility and Ctrl focus handling, followed by three quick-controls checks covering collapse/reopen, fullscreen exit while collapsed, slider changes and prevention of accidental marks. The fullscreen layout was also rendered and visually inspected.
+
+## v0.24.3
+
+- The floating Pencil/Eraser/Transform/Tissue/Smudge/Size toolbar is now visible only in fullscreen mode. Leaving fullscreen also closes its Size popup and removes its input targets. The Ctrl size shortcut remains available in either mode.
+- Validation: both quick-controls regression tests pass, covering normal/fullscreen visibility, exit cleanup, size changes, tool selection and input ownership without drawing accidental marks.
+
+## v0.24.2
+
+- Imported sampled tips now live as separate, lossless `.pencil` files in `imported_brushes`, beside the executable. `Pencils.gallery` keeps native presets, collection metadata and order without embedded imported masks. Startup and reopening the gallery detect only existing valid pencil files in this folder. Missing files are not reconstructed from in-memory brush caches. Individual malformed files are skipped with an explanation.
+- Existing local galleries migrate their embedded tips once, retaining pencil IDs and independent `pencil.settings` controls. Removing a gallery pencil or collection deletes only its managed copies, preserving source ABRs and artwork resources. Raw ABRs are converted using Import ABR; they are not automatically imported just by dropping them into the folder. Packages exclude personal gallery/settings resources and include an empty `imported_brushes` folder.
+- Replaced Pencil Material flow with a single **Opacity** percentage control. New default transfer is 15% stronger; light strokes are approximately 15% darker without widening their contact. Zero opacity performs no paper or pigment edit on CPU or GPU. Existing saved flow values remain compatible, and the control persists independently for each pencil.
+- Ctrl+Plus, Ctrl+Equals and Ctrl+Minus now zoom only the drawing around the viewport center. The interface no longer changes scale from these shortcuts.
+- Holding Ctrl opens a draggable tool-size slider. It adjusts Pencil, Eraser, Smudge, Tissue and other supported drawing sizes in document pixels, or uniformly scales an active transform around its center. Ctrl keyboard chords remain available. A 48 px tool bar in the canvas margins provides Pencil, Eraser, Transform, Tissue, Smudge and a touch-accessible Size button, including fullscreen. UI gestures retain pointer ownership through lift to prevent marks beneath controls.
+- Added **Copy layer** beside Merge. The active layer is duplicated immediately above the original, retaining opacity, visibility, blend mode, material and editable paths. Copying is one undoable action; editing the copy does not change the original.
+- Added **Mirror horizontal** and **Mirror vertical** to the transform controls. Selections preview a flip before Confirm/Cancel; vector selections retain paths, while pixel-fragment transforms use the existing raster-bake behavior. With no selection, the complete layered drawing and paper are mirrored losslessly. Undo/Redo supports mixed copy, mirror and portrait/landscape operations.
+- Paper orientation choices now show only their visual icons, with accessible names and tooltips. Added **Texture opacity** (0–100%) below paper texture selection: it fades visible texture and relief toward the selected paper color without altering the material simulation. It is saved per drawing, preserved in native/PSD projects, used in previews and exports, and inherited when creating a drawing from Paper settings. Older files default to full texture opacity.
+- Improved numerical precision for tiny pencil deposits on CPU and GPU, reducing differences in pressure packing near saturation.
+
+- Validation: 198 regression tests pass, plus focused gallery checks after the missing-file selection fix. Coverage includes legacy brush migration, missing/corrupt resources, independent pencil controls, zoom/UI scale, Ctrl-size and fullscreen input, copying/editing layers, vector/pixel mirrors, mixed structural Undo/Redo, paper texture fading and native/PSD round trips. All 26 supplied Chromagraph sampled tips (24,037,129 decoded bytes) round-trip through separate pencil files without shape or collection changes. Measured light-stroke darkening is 13.45–13.75%, with unchanged contact coverage.
+
+- Release GPU validation on Radeon RX 7900 XTX: Vulkan and DirectX 12 passed 313 compute batches combined, including selection clipping and Undo/Redo checks. Rendered CPU/GPU channel differences were at most 1/255. All 198 regression tests also passed after the precision change.
+
+## v0.24.1
+
+- Added multiple layer selection: Ctrl-click toggles individual rows; Shift-click selects a range from the anchor; Ctrl+Shift adds a range. Plain clicks return to a single selected layer.
+- Added **Select multiple** for pen/touch use without a keyboard. Layer rows expand to 44 px touch targets, and tapping toggles membership. All selected layers highlight; the active drawing layer is labeled separately.
+- With two or more layers selected, **Merge selected (N)** replaces Merge down and merges the entire selection in one operation. One Undo restores every original layer, position, opacity, blend mode, material deposit and editable path; Redo merges again.
+- Supports non-adjacent selections. Their merged result occupies the highest selected position; intervening unselected layers remain separate and keep their data/order. Moving selected content above intervening layers can change blending; the panel explains this when gaps exist. Contiguous selections preserve the current appearance.
+- Hidden selected layers must be shown before merging. Selecting layers does not mark the drawing modified. Selection follows stable IDs through reordering, remains separate for each drawing during the session, and is not embedded in the saved artwork.
+- Generalized merge compositing to combine all selected material in one pass. Shared paper stays separate, matching Multiply/Normal/Screen groups retain their blend behavior, and mixed groups bake their current combined appearance into Normal material. The result remains erasable and supports new editable strokes, native projects and layered PSD.
+- All 186 tests pass. UI-event checks cover Ctrl/Shift selection, touch toggling, highlight membership, active-layer identity and merging four editable layers with one Undo. Engine checks cover non-adjacent layer order, untouched intervening material, mixed blend modes, hidden-layer protection, selection IDs through reordering, rotation, and native/PSD 8-bit/16-bit round trips of a multi-layer merge. The touch-selection panel was rendered and inspected without taking over the desktop.
+
+## v0.24.0
+
+- Added **Merge down** to Layers. It combines the active layer with the visible layer immediately below, bakes their opacity and rendered strokes into one erasable/smudgeable graphite layer, and leaves the shared paper and other layers intact. The bottom layer and hidden pairs are protected.
+- Merging is undoable without clearing stroke history. Undo restores both layers, their original deposits, opacity, blend modes and editable paths; Redo reapplies the merge. Merge history also survives portrait/landscape rotation.
+- Multiply, Normal and Screen pairs retain their respective blend mode and transparency independently of the paper/backdrop. Mixed modes and Darken/Lighten pairs bake their current appearance into a Normal layer, so their original separate blending behavior is no longer retained. The merged layer's opacity becomes 100%, with the former opacity included in its material coverage.
+- Increased local paper capacity by **15%** in CPU and GPU deposition. Repeated passes with dark graphite can reach deeper blacks; the chosen pencil color and existing deposited marks are unchanged. Normalized tissue/custom powder transfer to keep light initial passes nearly unchanged.
+- Merged material uses the existing native and layered PSD project formats, without a format change. New strokes remain editable above the merged material base; Undo restores the original paths from before merging.
+- All 182 regression tests pass. Merge checks cover every pair of blend modes at multiple opacities (visible difference at most 1/255), original layer/path restoration, paper tint, rotation, unrelated layers, native/PSD 8-bit/16-bit reopening and erasing merged material. The first light tissue pass differs by less than 0.1% while saturation reaches the 15% higher capacity.
+- Radeon RX 7900 XTX checks passed 220 compute batches each on Vulkan and DirectX 12, including selection clipping on DirectX 12, native/imported pencils, tissue and erasers. CPU/GPU visible differences remain within 1/255 per color channel; undo/redo is exact.
 
 ## v0.23.9
 

@@ -64,6 +64,7 @@ mod tests {
         }
         let before = a.active_tab;
         a.document.set_paper_color([240, 230, 210]);
+        a.document.set_paper_texture_opacity(0.42);
         let pos = ctx.data(|d| {
             d.get_temp::<Rect>(egui::Id::new("paper_create"))
                 .unwrap()
@@ -94,6 +95,7 @@ mod tests {
             (472, 266)
         );
         assert_eq!(a.document.paper_color_rgb, [240, 230, 210]);
+        assert_eq!(a.document.paper_texture_opacity,0.42);
     }
 }
 impl GraphiteApp {
@@ -127,7 +129,7 @@ impl GraphiteApp {
                     for (landscape,label,icon) in [(false,"Portrait",crate::ui::action_icons::ActionIcon::Portrait),(true,"Landscape",crate::ui::action_icons::ActionIcon::Landscape)] {
                         let response=crate::ui::action_icons::button_sized(ui,icon,label,(self.document.spec.width_px>self.document.spec.height_px)==landscape,Vec2::splat(44.));
                         #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new(("paper_orientation",landscape)),response.rect));
-                        if response.clicked() || ui.button(label).clicked() {
+                        if response.clicked() {
                             action=TopbarAction::CanvasOrientation(landscape);
                             if (self.paper_settings.width_mm>self.paper_settings.height_mm)!=landscape {
                                 std::mem::swap(&mut self.paper_settings.width_mm,&mut self.paper_settings.height_mm);
@@ -148,6 +150,11 @@ impl GraphiteApp {
                 });
                 if ui.button("Load paper texture…").clicked() || (before!=self.paper_texture_choice && self.paper_texture_choice==PaperTextureChoice::Custom && self.custom_paper_texture.is_none()) {action=TopbarAction::LoadCustomPaperTexture;}
                 else if before!=self.paper_texture_choice{action=TopbarAction::ApplyPaperTexture;}
+                let mut opacity=self.document.paper_texture_opacity*100.;
+                let response=ui.add(egui::Slider::new(&mut opacity,0.0..=100.0).text("Texture opacity").suffix("%").integer())
+                    .on_hover_text("Fade the visible texture toward the paper color. 0% is flat color; 100% shows the full texture. The paper's drawing behavior stays the same.");
+                #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("paper_texture_opacity"),response.rect));
+                if response.changed() && self.document.set_paper_texture_opacity(opacity/100.) {self.tabs[self.active_tab].modified=true;}
                 ui.collapsing("Surface information",|ui|{
                     ui.label(format!("Material coverage: {:.2}%",self.sidebar_statistics.1*100.));
                     ui.label(format!("Surface disturbance: {:.4}%",self.sidebar_statistics.2*100.));
@@ -183,6 +190,7 @@ impl GraphiteApp {
         }
         if create {
             let color = self.document.paper_color_rgb;
+            let opacity=self.document.paper_texture_opacity;
             let old = self.active_tab;
             self.handle_topbar_action(TopbarAction::NewCanvas {
                 preset: self.canvas_preset,
@@ -190,6 +198,7 @@ impl GraphiteApp {
             });
             if old != self.active_tab {
                 self.document.set_paper_color(color);
+                self.document.set_paper_texture_opacity(opacity);
                 self.paper_settings.open = false;
             }
         }

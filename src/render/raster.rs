@@ -189,11 +189,17 @@ fn paper_pixel_rgb(document: &Document, i: usize) -> [f32; 3] {
     let permanent_change = (height - rest_height).abs() * 0.030 + abrasion * 0.018;
     let brightness = (1.0 + relief - permanent_change).clamp(0.82, 1.04);
     let base_paper = document.paper_albedo[i];
-    [
+    let textured = [
         (base_paper[0] * brightness * (document.paper_color_rgb[0] as f32 / 255.0)).clamp(0.0, 1.0),
         (base_paper[1] * brightness * (document.paper_color_rgb[1] as f32 / 255.0)).clamp(0.0, 1.0),
         (base_paper[2] * brightness * (document.paper_color_rgb[2] as f32 / 255.0)).clamp(0.0, 1.0),
-    ]
+    ];
+    let opacity=document.paper_texture_opacity.clamp(0.,1.);
+    if opacity>=1. {return textured;}
+    std::array::from_fn(|c| {
+        let color=document.paper_color_rgb[c] as f32/255.;
+        color+(textured[c]-color)*opacity
+    })
 }
 
 fn composite_deposit(
@@ -209,6 +215,41 @@ fn composite_deposit(
     blend_color(base, body, density * opacity, mode)
 }
 
+/// Composite selected material once, retaining a transparent material base for further editing.
+/// Non-adjacent selections move to the highest selected position; intervening layers stay separate.
+pub(crate) fn merge_layer_pixel(doc: &Document, indices: &[usize], i: usize, mode: BlendMode, independent: bool) -> PixelDepositState {
+    let mut alpha=0.;
+    let mut out=PixelDepositState::default();
+    let mut base=if mode==BlendMode::Multiply && independent { [1.;3] } else { [0.;3] };
+    if !independent {
+        base=paper_pixel_rgb(doc,i);
+        for l in 0..*indices.last().unwrap() {
+            if !indices.contains(&l) && doc.layers[l].visible {
+                base=composite_deposit(base,doc.layer_deposit_pixel(l,i),doc.layers[l].blend_mode,doc.layers[l].opacity as f32/255.);
+            }
+        }
+    }
+    let mut color=base;
+    for &l in indices {
+        let p=doc.layer_deposit_pixel(l,i);
+        let (rgb,density)=deposit_optics(p);
+        let opacity=doc.layers[l].opacity as f32/255.;
+        let a=density*opacity;
+        alpha+=a*(1.-alpha);
+        color=blend_color(color,rgb,a,doc.layers[l].blend_mode);
+        out.graphite_mass+=p.graphite_mass*opacity; out.clay_mass+=p.clay_mass*opacity; out.wax_mass+=p.wax_mass*opacity;
+        out.loose_mass+=p.loose_mass*opacity; out.compacted_mass+=p.compacted_mass*opacity;
+        out.orientation_x+=p.orientation_x*opacity; out.orientation_y+=p.orientation_y*opacity;
+    }
+    if alpha<=1e-8 { return PixelDepositState::default(); }
+    let rgb: [f32;3]=std::array::from_fn(|j| ((color[j]-base[j]*(1.-alpha))/alpha).clamp(0.,1.));
+    let scale=-(-alpha.min(1.-f32::EPSILON)).ln_1p()/out.optical_depth().max(1e-10);
+    out.graphite_mass*=scale; out.clay_mass*=scale; out.wax_mass*=scale;
+    out.loose_mass*=scale; out.compacted_mass*=scale; out.orientation_x*=scale; out.orientation_y*=scale;
+    let mass=out.total_deposit();
+    out.color_r_mass=rgb[0]*mass; out.color_g_mass=rgb[1]*mass; out.color_b_mass=rgb[2]*mass;
+    out
+}
 /// Straight pigment RGB and transparency, without paper baked into drawing layers.
 /// Layer opacity is deliberately separate: PSD writes it in the layer record, so channel alpha
 /// must remain the original pigment coverage. The compositor applies opacity exactly once.
@@ -355,6 +396,23 @@ mod tests {
         document::CanvasSpec,
         paper::{generate_builtin_albedo, PaperPreset, PaperTexturePreset},
     };
+
+    #[test]
+    fn paper_texture_opacity_fades_only_visible_paper_and_defaults_for_old_projects() {
+        let mut doc=tiny_document();let i=doc.index(2,2);
+        doc.paper_albedo[i]=[0.55,0.72,0.81];doc.set_paper_color([210,180,140]);
+        seed_active_color(&mut doc,i,[0.6,0.2,0.1]);
+        let material=doc.surface.pixel(i);let ink=layer_pixel_rgba(&doc,Some(0),i);
+        let full=paper_pixel_rgb(&doc,i);
+        assert!(doc.set_paper_texture_opacity(0.));
+        let flat=paper_pixel_rgb(&doc,i);assert_eq!(flat,doc.paper_color_rgb.map(|v|v as f32/255.));
+        doc.set_paper_texture_opacity(0.5);let half=paper_pixel_rgb(&doc,i);
+        for c in 0..3 {assert!((half[c]-(flat[c]+full[c])*0.5).abs()<1e-6);}
+        assert_eq!(doc.surface.pixel(i),material);assert_eq!(layer_pixel_rgba(&doc,Some(0),i),ink);
+        assert!(!doc.set_paper_texture_opacity(f32::NAN));assert_eq!(doc.paper_texture_opacity,0.5);
+        let mut json=serde_json::to_value(&doc).unwrap();json.as_object_mut().unwrap().remove("paper_texture_opacity");
+        assert_eq!(serde_json::from_value::<Document>(json).unwrap().paper_texture_opacity,1.);
+    }
 
     fn tiny_document() -> Document {
         let spec = CanvasSpec::from_physical("tiny", 5.0, 5.0, 100.0);

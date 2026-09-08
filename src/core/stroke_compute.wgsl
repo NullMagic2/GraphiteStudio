@@ -9,14 +9,12 @@ struct Metadata { region:vec4<u32>, counts:vec4<u32>, }
 @group(0) @binding(5) var<uniform> params:Metadata;
 @group(0) @binding(6) var<storage,read> coordinates:array<u32>;
 fn ease(v:f32)->f32 {let t=clamp(v,0.,1.);return t*t*(3.-2.*t);}
-// Near zero, exp() accuracy varies by driver. Preserve the CPU's f32
-// deposition threshold: exp(-x) is rounded on the [0.5, 1] float grid before
-// it is subtracted from one. This also avoids tiny transfer differences
-// triggering an extra full pressure-packing step near saturation.
+// Stable equivalent of the CPU's -exp_m1(-x). Subtracting exp(-x)
+// from one quantizes tiny deposits and can change pressure-packing steps.
 fn deposition_integral(x:f32)->f32 {
     if x<0.125 {
         let y=x*(1.-x*(0.5-x*(0.1666666667-x*(0.04166666667-x*(0.008333333333-x*0.001388888889)))));
-        return floor(y*16777216.+0.5)/16777216.;
+        return y;
     }
     return 1.-exp(-x);
 }
@@ -101,7 +99,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         let d=dabs[k];let delta=position-vec2(d.v[0],d.v[1]);
         if any(position<vec2(d.v[58],d.v[59])) || any(position>=vec2(d.v[60],d.v[61])){continue;}
         let total=pixel.v[2]+pixel.v[3]+pixel.v[4];
-        let capacity=0.38+1.55*clamp(1.-pixel.v[0],0.,1.)+0.24*pixel.v[12];
+        let capacity=1.15*(0.38+1.55*clamp(1.-pixel.v[0],0.,1.)+0.24*pixel.v[12]);
         if d.v[36]==1. {
             let distance=length(delta);let radius=d.v[39];let soft=select(0.22,0.45,d.v[38]>0.5);
             let coverage=ease((radius-distance+0.5)/max(radius*soft,1.));if coverage<=0.0001 || total<=0.{continue;}

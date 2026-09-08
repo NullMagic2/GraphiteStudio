@@ -6,8 +6,11 @@ mod editing;
 mod options;
 mod projects;
 mod quick_line;
+mod quick_controls;
 mod gallery;
 mod paper_settings;
+mod shortcuts_ui;
+use graphite_studio::shortcuts::Command;
 
 use crate::{
     core::{
@@ -100,6 +103,8 @@ pub struct GraphiteApp {
     last_statistics_update: Option<std::time::Instant>,
     preference_status: String,
     editing: editing::EditingState,
+    quick_controls: quick_controls::QuickControls,
+    shortcuts: shortcuts_ui::ShortcutEditor,
     brush_library: Vec<std::sync::Arc<crate::core::brush::BrushTip>>,
     gallery: gallery::GalleryUi,
     paper_settings: paper_settings::PaperSettingsUi,
@@ -324,6 +329,8 @@ impl GraphiteApp {
         cc: &eframe::CreationContext<'_>,
         mode: crate::performance::AccelerationMode,
     ) -> Self {
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        cc.egui_ctx.set_zoom_factor(1.0);
         let mut app = Self::with_render_state(cc.wgpu_render_state.clone());
         #[cfg(windows)]
         { app.dialog_parent = cc.winit_window().cloned(); }
@@ -377,6 +384,8 @@ impl GraphiteApp {
             last_statistics_update: None,
             preference_status: String::new(),
             editing: Default::default(),
+            quick_controls: Default::default(),
+            shortcuts: Default::default(),
             brush_library: Vec::new(),
             gallery: Default::default(),
             paper_settings: Default::default(),
@@ -430,7 +439,7 @@ impl GraphiteApp {
             layers_panel_width: 250.,
             fit_requested: true,
             sidebar_statistics: (0, 0.0, 0.0),
-            status: "Ready. Graphite Studio v0.23.9".to_owned(),
+            status: "Ready. Graphite Studio v0.24.7".to_owned(),
         }
     }
 
@@ -864,6 +873,7 @@ impl GraphiteApp {
     }
 
     fn handle_topbar_action(&mut self, action: TopbarAction) {
+        if action == TopbarAction::Shortcuts {self.open_shortcuts();return;}
         if action == TopbarAction::PencilGallery {self.open_pencil_gallery();return;}
         if action == TopbarAction::PaperSettings {
             self.finish_stroke();self.apply_transform();self.gallery.open=false;self.paper_settings.open=true;return;
@@ -908,7 +918,7 @@ impl GraphiteApp {
             self.finish_stroke();
             self.shape_drag = None;
             self.editing.guide = false;
-            self.fullscreen = true;
+            self.fullscreen = !self.fullscreen;
             self.fullscreen_size = None;
             self.fit_requested = true;
             return;
@@ -936,6 +946,7 @@ impl GraphiteApp {
         }
         match action {
             TopbarAction::None => {}
+            TopbarAction::Shortcuts => unreachable!(),
             TopbarAction::PaperSettings => unreachable!(),
             TopbarAction::PencilGallery => unreachable!(),
             TopbarAction::Fullscreen => unreachable!(),
@@ -979,6 +990,7 @@ impl GraphiteApp {
     }
 
     fn handle_layer_panel_action(&mut self, action: LayerPanelAction) {
+        if let LayerPanelAction::SetMultiple(multiple)=action { self.document.layer_selection.multiple=multiple; return; }
         if action == LayerPanelAction::None {
             return;
         }
@@ -990,30 +1002,56 @@ impl GraphiteApp {
             self.finish_stroke();
         }
 
-        if !matches!(action, LayerPanelAction::Activate(_)) {
+        if !matches!(action, LayerPanelAction::Activate(_) | LayerPanelAction::Select {..}) {
             self.tabs[self.active_tab].modified = true;
         }
         match action {
             LayerPanelAction::None => {}
             LayerPanelAction::Activate(index) => {
-                if self.document.activate_layer(index) {
-                    self.stroke_engine.clear_smudger();
-                    self.status = format!("Active layer: {}.", self.document.active_layer_name());
-                }
+                self.document.select_layer(index,false,false);
+                self.stroke_engine.clear_smudger();
+                self.status = format!("Active layer: {}.", self.document.active_layer_name());
             }
+            LayerPanelAction::Select {index,toggle,range} => {
+                self.document.select_layer(index,toggle,range);
+                self.stroke_engine.clear_smudger();
+                self.status=format!("{} layers selected. Active layer: {}.",self.document.selected_layer_indices().len(),self.document.active_layer_name());
+            }
+            LayerPanelAction::SetMultiple(_) => {}
             LayerPanelAction::Add => {
                 self.document.add_layer();
+                self.document.select_layer(self.document.active_layer_index(),false,false);
                 self.stroke_engine.clear_smudger();
                 self.status = format!("Added {}.", self.document.active_layer_name());
             }
             LayerPanelAction::RemoveActive => {
                 let name = self.document.active_layer_name().to_owned();
                 if self.document.remove_active_layer() {
+                    self.document.select_layer(self.document.active_layer_index(),false,false);
                     // Stroke history entries can target the deleted layer, so clear history rather
                     // than leaving hidden invalid references in the undo stack.
                     self.history.clear();
                     self.stroke_engine.clear_smudger();
                     self.status = format!("Deleted {name}. Stroke undo history was reset after the structural layer change.");
+                }
+            }
+            LayerPanelAction::MergeDown => {
+                if self.history.merge_down(&mut self.document) {
+                    self.stroke_engine.clear_smudger();
+                    self.status = "Merged down into erasable graphite. Ctrl+Z restores both layers and editable paths.".into();
+                }
+            }
+            LayerPanelAction::CopyActive => {
+                if self.history.copy_layer(&mut self.document) {
+                    self.stroke_engine.clear_smudger();
+                    self.status=format!("Created {} above the original. Ctrl+Z undoes the copy.",self.document.active_layer_name());
+                }
+            }
+            LayerPanelAction::MergeSelected => {
+                let count=self.document.selected_layer_indices().len();
+                if self.history.merge_selected(&mut self.document) {
+                    self.stroke_engine.clear_smudger();
+                    self.status=format!("Merged {count} layers. Ctrl+Z restores all original layers and editable paths.");
                 }
             }
             LayerPanelAction::MoveActiveUp => {
@@ -1066,9 +1104,10 @@ impl GraphiteApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ui: &mut egui::Ui) {
+        if self.shortcuts.open {return;}
         // Esc must always leave fullscreen, even if a field or transform had focus.
         if self.fullscreen
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            && ui.input_mut(|i| self.shortcuts.bindings.consume(i,Command::Cancel))
         {
             self.cancel_transform_and_deselect();
             self.fullscreen = false;
@@ -1079,18 +1118,18 @@ impl GraphiteApp {
             return;
         }
         // Do not steal Ctrl+Z/Ctrl+Y from an actively edited numeric/text field.
-        if self.save_as_open || ui.ctx().egui_wants_keyboard_input() {
+        if self.shortcuts.open || self.gallery.open || self.paper_settings.open || self.save_as_open || ui.ctx().text_edit_focused() {
             return;
         }
-        let plain_key = ui.input(|i| i.modifiers.is_none());
-        if plain_key {
+        
+        {
             let tool = ui.input_mut(|i| {
-                if i.consume_key(egui::Modifiers::NONE, egui::Key::P)
-                    || i.consume_key(egui::Modifiers::NONE, egui::Key::B) {
+                if self.shortcuts.bindings.consume(i,Command::Pencil)
+                    || self.shortcuts.bindings.consume(i,Command::PencilAlternate) {
                     Some(ToolKind::Pencil)
-                } else if i.consume_key(egui::Modifiers::NONE, egui::Key::E) {
+                } else if self.shortcuts.bindings.consume(i,Command::Eraser) {
                     Some(ToolKind::Eraser)
-                } else if i.consume_key(egui::Modifiers::NONE, egui::Key::V) {
+                } else if self.shortcuts.bindings.consume(i,Command::VectorSelect) {
                     Some(ToolKind::VectorSelect)
                 } else {
                     None
@@ -1100,7 +1139,7 @@ impl GraphiteApp {
                 self.select_tool(tool);
                 return;
             }
-            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::R)) {
+            if ui.input_mut(|i| self.shortcuts.bindings.consume(i,Command::RotateView)) {
                 self.finish_stroke();
                 self.cancel_transform_for_tool_change();
                 self.shape_drag = None;
@@ -1111,7 +1150,7 @@ impl GraphiteApp {
                 return;
             }
             if self.rotate_view
-                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                && ui.input_mut(|i| self.shortcuts.bindings.consume(i,Command::Cancel))
             {
                 self.rotate_view = false;
                 self.view_rotation_drag = false;
@@ -1121,18 +1160,21 @@ impl GraphiteApp {
         if self.editing_shortcuts(ui) {
             return;
         }
+        for (command,action) in [(Command::Fit,TopbarAction::Fit),(Command::Fullscreen,TopbarAction::Fullscreen)] {
+            if ui.input_mut(|i|self.shortcuts.bindings.consume(i,command)) {self.handle_topbar_action(action);return;}
+        }
 
         let action = ui.input_mut(|input| {
-            let ctrl_without_shift = input.modifiers.ctrl && !input.modifiers.shift;
-            if input.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::S) {
+            
+            if self.shortcuts.bindings.consume(input,Command::SaveAs) {
                 TopbarAction::SaveProjectAs
-            } else if ctrl_without_shift && input.consume_key(egui::Modifiers::CTRL, egui::Key::S) {
+            } else if self.shortcuts.bindings.consume(input,Command::Save) {
                 TopbarAction::SaveProject
-            } else if ctrl_without_shift && input.consume_key(egui::Modifiers::CTRL, egui::Key::O) {
+            } else if self.shortcuts.bindings.consume(input,Command::Open) {
                 TopbarAction::OpenProject
-            } else if ctrl_without_shift && input.consume_key(egui::Modifiers::CTRL, egui::Key::Z) {
+            } else if self.shortcuts.bindings.consume(input,Command::Undo) {
                 TopbarAction::Undo
-            } else if ctrl_without_shift && input.consume_key(egui::Modifiers::CTRL, egui::Key::Y) {
+            } else if self.shortcuts.bindings.consume(input,Command::Redo) {
                 TopbarAction::Redo
             } else {
                 TopbarAction::None
@@ -1211,8 +1253,28 @@ impl GraphiteApp {
         area.show_viewport(ui, |ui, scroll_viewport| {
             let view_rect = ui.clip_rect();
             let view_size = scroll_viewport.size();
+            if !self.shortcuts.open && !self.gallery.open && !self.paper_settings.open && !self.save_as_open
+                && !ui.ctx().text_edit_focused() {
+                let steps=ui.input_mut(|input| {
+                    let mut steps=0i32;
+                    input.events.retain(|event| {
+                        if let egui::Event::Key {key,pressed:true,modifiers,..}=event {
+                            if self.shortcuts.bindings.matches(Command::ZoomIn,*key,*modifiers) || self.shortcuts.bindings.matches(Command::ZoomInAlternate,*key,*modifiers) {steps+=1;return false;}
+                            if self.shortcuts.bindings.matches(Command::ZoomOut,*key,*modifiers) {steps-=1;return false;}
+                        }
+                        true
+                    });
+                    steps
+                });
+                if steps!=0 {
+                    self.finish_stroke();
+                    let motion=self.viewport.zoom_at(view_size*0.5,scroll_viewport.min.to_vec2(),view_size,doc_size,1.2f32.powi(steps.clamp(-20,20)));
+                    ui.scroll_with_delta_animation(motion,egui::style::ScrollAnimation::none());
+                    ui.ctx().request_repaint();
+                }
+            }
             let mouse_pressure = self.settings.mouse_pressure;
-            let input = PointerFrame::capture(
+            let mut input = PointerFrame::capture(
                 ui,
                 view_rect,
                 &mut self.pressure_input,
@@ -1220,7 +1282,8 @@ impl GraphiteApp {
                 self.settings.pen_pressure_gamma,
             );
             // Consume native packets, but keep gallery/settings gestures off the drawing.
-            let input = if self.gallery.open || self.paper_settings.open || self.save_as_open { PointerFrame::default() } else { input };
+            input.space_down=!ui.ctx().text_edit_focused() && ui.input(|i|self.shortcuts.bindings.down(i,Command::Pan));
+            let input = if self.shortcuts.open || self.gallery.open || self.paper_settings.open || self.save_as_open { PointerFrame::default() } else { input };
 
             if !input.touch_navigation {
                 self.touch_rotation = None;
@@ -1360,8 +1423,10 @@ impl GraphiteApp {
             .map(|p| self.viewport.document_to_screen(canvas_rect, p));
             let native_owned = self.pressure_input.native_owns_pointer();
             let pen_frames = self.pressure_input.take_pen_frames();
+            self.show_quick_controls(ui, Rect::from_points(&paper_corners), view_rect);
             let action_rect = self.show_transform_actions(ui, canvas_rect, view_rect);
             let actions_block_mouse = if !native_owned { self.transform_actions_block_input(action_rect, input) } else { false };
+            let quick_block_mouse = if !native_owned {self.quick_controls.block_input(input)} else {false};
             if input.touch_navigation && !native_owned {
                 self.shape_drag = None;
                 self.editing.lasso = None;
@@ -1376,11 +1441,12 @@ impl GraphiteApp {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             } else if native_owned {
                 for frame in pen_frames {
-                    if !self.transform_actions_block_input(action_rect, frame) {
+                    let quick_block=self.quick_controls.block_input(frame);
+                    if !self.transform_actions_block_input(action_rect, frame) && !quick_block {
                         self.handle_drawing_input(ui, canvas_rect, frame);
                     }
                 }
-            } else if !actions_block_mouse {
+            } else if !actions_block_mouse && !quick_block_mouse {
                 self.handle_drawing_input(ui, canvas_rect, input);
             }
             // Native pens may send no packets while held still. Check the hold
@@ -1434,7 +1500,7 @@ impl GraphiteApp {
                     ),
                 ));
             }
-            if !self.rotate_view && !input.position.is_some_and(|p| action_rect.is_some_and(|r| r.contains(p))) {
+            if !self.rotate_view && !self.quick_controls.covers(input.position) && !input.position.is_some_and(|p| action_rect.is_some_and(|r| r.contains(p))) {
                 self.paint_cursor(
                     painter,
                     view_rect,
@@ -1447,7 +1513,7 @@ impl GraphiteApp {
     }
 
     fn handle_drawing_input(&mut self, ui: &mut egui::Ui, canvas_rect: Rect, input: PointerFrame) {
-        if self.gallery.open || self.paper_settings.open || self.save_as_open { return; }
+        if self.shortcuts.open || self.gallery.open || self.paper_settings.open || self.save_as_open { return; }
         if self.move_quick_line(ui, canvas_rect, input) { return; }
         if self.editing.transform.is_some()
             || matches!(self.settings.tool, ToolKind::Lasso | ToolKind::VectorSelect)
@@ -1799,11 +1865,8 @@ impl eframe::App for GraphiteApp {
         // eframe runs logic for hidden/minimized windows too when a repaint is requested.
         #[cfg(windows)]
         {
-            if ctx.input_mut(|input| {
-                input.consume_key(
-                    egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
-                    egui::Key::Home,
-                )
+            if !self.shortcuts.open && !ctx.text_edit_focused() && ctx.input_mut(|input| {
+                self.shortcuts.bindings.consume(input,Command::Recover)
             }) {
                 self.window_recovery.request_recovery();
             }
@@ -1841,8 +1904,11 @@ impl GraphiteApp {
     }
 
     fn interface(&mut self, ui: &mut egui::Ui) {
+        ui.data_mut(|d|d.insert_temp(egui::Id::new("active_shortcuts"),self.shortcuts.bindings.clone()));
+        ui.ctx().options_mut(|o| o.zoom_with_keyboard = false);
         self.tick_pencil_preferences(ui.ctx());
         self.apply_display_style(ui.ctx());
+        self.prepare_quick_controls(ui);
         self.handle_keyboard_shortcuts(ui);
         if self.fullscreen_applied != self.fullscreen {
             ui.ctx()
@@ -1850,7 +1916,7 @@ impl GraphiteApp {
             self.fullscreen_applied = self.fullscreen;
             ui.ctx().request_repaint();
         }
-        self.show_guide(ui.ctx());
+        self.show_shortcuts(ui.ctx()); self.show_guide(ui.ctx());
         self.show_pencil_gallery(ui.ctx());
         self.show_paper_settings(ui.ctx());
         self.show_save_as(ui.ctx());
@@ -1937,6 +2003,7 @@ impl GraphiteApp {
                                 .show(ui, |ui| {
                                     self.path_controls(ui);
                                     if self.editing.transform.is_some() || matches!(self.settings.tool, ToolKind::Lasso | ToolKind::VectorSelect) {
+                                        self.mirror_controls(ui);
                                         let aspect = ui.checkbox(&mut self.settings.transform_keep_aspect, "Keep aspect ratio")
                                             .on_hover_text("Preserve the selection's proportions while resizing. Shift also constrains resizing.");
                                         #[cfg(test)]
@@ -1950,7 +2017,7 @@ impl GraphiteApp {
                                             if ui.add(egui::DragValue::new(&mut degrees).speed(0.5).suffix("°")).changed() && degrees.is_finite(){t.angle=degrees.rem_euclid(360.).to_radians();}
                                         }
                                         ui.small("Drag inside to move; corners resize. Drag the round handle to rotate. Shift: keep proportions / snap 90°.");ui.separator();
-                                    }else{ui.horizontal(|ui|{if ui.button("Transform · Ctrl+T").clicked(){self.begin_transform(ui.ctx());}if ui.button("Rotate · Ctrl+R").clicked(){self.begin_rotation(ui.ctx());}});}
+                                    }else{ui.horizontal(|ui|{if ui.button(graphite_studio::shortcuts::hint(ui.ctx(),"Transform",Command::Transform)).clicked(){self.begin_transform(ui.ctx());}if ui.button(graphite_studio::shortcuts::hint(ui.ctx(),"Rotate",Command::RotateSelection)).clicked(){self.begin_rotation(ui.ctx());}});}
                                     if self.settings.tool==ToolKind::Pencil {
                                         if ui.add_sized([240.,44.],egui::Button::new("Pencil gallery…")).clicked() {self.open_pencil_gallery();}
                                         ui.small(self.settings.pencil_texture.as_ref().map(|t|t.name.as_str()).unwrap_or("Standard graphite"));
@@ -2204,6 +2271,38 @@ mod tests {
         assert!(app.document.surface.graphite_mass.iter().any(|&m| m > 0.));
         assert!(app.history.undo(&mut app.document));
         assert!(app.document.surface.graphite_mass.iter().all(|&m| m == 0.));
+    }
+
+    #[test]
+    fn keyboard_zoom_changes_only_the_drawing_and_preserves_text_input() {
+        let mut app=GraphiteApp::with_render_state(None);
+        app.replace_document(CanvasSpec::from_physical("Keyboard zoom",40.,40.,120.));
+        let ctx=egui::Context::default();
+        let frame=|app:&mut GraphiteApp,events:Vec<egui::Event>|ctx.run_ui(egui::RawInput {
+            screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(1440.,920.))),events,..Default::default()
+        },|ui|app.interface(ui));
+        for _ in 0..3 {frame(&mut app,vec![]);}
+        let zoom=app.viewport.zoom;let ppp=ctx.pixels_per_point();
+        let control=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new("pencil_width_response")).unwrap());
+        let key=|key,modifiers|egui::Event::Key {key,physical_key:None,pressed:true,repeat:false,modifiers};
+        // These shortcuts also work while the pointer is over a panel.
+        frame(&mut app,vec![egui::Event::PointerMoved(Pos2::new(30.,160.)),key(egui::Key::Plus,egui::Modifiers::CTRL|egui::Modifiers::SHIFT)]);
+        frame(&mut app,vec![]);
+        assert!((app.viewport.zoom/zoom-1.2).abs()<0.0001);
+        assert_eq!(ctx.zoom_factor(),1.);assert_eq!(ctx.pixels_per_point(),ppp);
+        assert_eq!(ctx.data(|d|d.get_temp::<Rect>(egui::Id::new("pencil_width_response")).unwrap()),control);
+        frame(&mut app,vec![key(egui::Key::Minus,egui::Modifiers::CTRL)]);
+        frame(&mut app,vec![]);
+        assert!((app.viewport.zoom-zoom).abs()<0.0001);
+        frame(&mut app,vec![key(egui::Key::Equals,egui::Modifiers::CTRL)]);
+        assert!((app.viewport.zoom/zoom-1.2).abs()<0.0001);
+        let zoom=app.viewport.zoom;
+        app.gallery.open=true;
+        for _ in 0..3 {frame(&mut app,vec![]);}
+        frame(&mut app,vec![key(egui::Key::Plus,egui::Modifiers::CTRL)]);
+        frame(&mut app,vec![]);
+        assert_eq!(app.viewport.zoom,zoom);assert_eq!(ctx.zoom_factor(),1.);
+        assert!(app.document.surface.graphite_mass.iter().all(|&m|m==0.));
     }
 
     #[test]

@@ -11,7 +11,9 @@ fn main() {
                 };
                 gallery.add(&tip.name,"Imported collection",&settings).unwrap();
             }
-            let saved = std::env::temp_dir().join(format!("graphite-abr-check-{}-{}.gallery",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            let root = std::env::temp_dir().join(format!("graphite-abr-check-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            std::fs::create_dir(&root).unwrap();
+            let saved = root.join("Pencils.gallery");
             gallery.save(&saved).unwrap();
             let restored = graphite_studio::pencil_gallery::Gallery::load(&saved).unwrap();
             assert_eq!(tips.len(), restored.pencils.len());
@@ -21,6 +23,8 @@ fn main() {
                 assert_eq!(preset.folder,"Imported collection");
             }
             std::fs::remove_file(saved).unwrap();
+            for file in std::fs::read_dir(root.join("imported_brushes")).unwrap(){std::fs::remove_file(file.unwrap().path()).unwrap();}
+            std::fs::remove_dir(root.join("imported_brushes")).unwrap();std::fs::remove_dir(root).unwrap();
             println!("All textures and collection labels survived gallery save/reopen exactly.");
         }
         Err(error) => { eprintln!("Import failed: {error}"); std::process::exit(1); }

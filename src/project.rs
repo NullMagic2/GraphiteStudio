@@ -267,6 +267,8 @@ fn validate(
         || doc.color_grain.len() != n
         || doc.paper_albedo.len() != n
         || doc.paper_albedo.iter().flatten().any(|v| !v.is_finite())
+        || !doc.paper_texture_opacity.is_finite()
+        || !(0.0..=1.0).contains(&doc.paper_texture_opacity)
     {
         return Err("Project material channels do not match the paper".into());
     }
@@ -500,6 +502,7 @@ mod tests {
         );
         let mut doc = Document::new(spec, PaperPreset::DrawingMedium, "Ivory", albedo);
         doc.set_paper_color([244, 230, 200]);
+        doc.set_paper_texture_opacity(0.37);
         let tip = PencilTipState::default();
         let engine = StrokeEngine::default();
         let mut settings = ToolSettings::default();
@@ -599,6 +602,7 @@ mod tests {
             b.document.surface.graphite_mass
         );
         assert_eq!(a.document.paper_albedo, b.document.paper_albedo);
+        assert_eq!(a.document.paper_texture_opacity,b.document.paper_texture_opacity);
         assert_eq!(
             a.document.surface.current_height,
             b.document.surface.current_height

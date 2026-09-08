@@ -3,6 +3,8 @@ pub mod calibration;
 pub mod contact;
 pub mod document;
 pub mod history;
+mod layer_merge;
+mod layer_copy;
 pub mod material;
 pub mod orientation;
 pub mod paper;

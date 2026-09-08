@@ -19,13 +19,17 @@ pub fn transform_action_button(ui: &mut egui::Ui, confirm: bool) -> egui::Respon
         ui.painter().line_segment([center + egui::vec2(-7., -7.), center + egui::vec2(7., 7.)], stroke);
         ui.painter().line_segment([center + egui::vec2(-7., 7.), center + egui::vec2(7., -7.)], stroke);
     }
-    response.on_hover_text(if confirm { "Confirm and deselect · Enter" } else { "Cancel transform and deselect · Esc" })
+    response.on_hover_text(graphite_studio::shortcuts::hint(ui.ctx(),if confirm {"Confirm and deselect"}else{"Cancel transform and deselect"},if confirm {graphite_studio::shortcuts::Command::Confirm}else{graphite_studio::shortcuts::Command::Cancel}))
 }
 
 pub fn tool_button(ui: &mut egui::Ui, tool: ToolKind, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(34., 34.), egui::Sense::click());
+    tool_button_sized(ui,tool,selected,34.)
+}
+
+pub fn tool_button_sized(ui: &mut egui::Ui, tool: ToolKind, selected: bool, size:f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     #[cfg(test)]
-    ui.data_mut(|d| d.insert_temp(egui::Id::new(("test_tool_icon", tool.label())), rect));
+    if size==34. {ui.data_mut(|d| d.insert_temp(egui::Id::new(("test_tool_icon", tool.label())), rect));}
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::Button,
@@ -43,11 +47,12 @@ pub fn tool_button(ui: &mut egui::Ui, tool: ToolKind, selected: bool) -> egui::R
         egui::StrokeKind::Inside,
     );
     paint_icon(ui.painter(), rect.shrink(6.), tool);
+    use graphite_studio::shortcuts::{hint,Command};
     response.on_hover_text(match tool {
-        ToolKind::Pencil => "Pencil · P / B",
-        ToolKind::Eraser => "Eraser · E",
-        ToolKind::VectorSelect => "Vector selection · V",
-        _ => tool.label(),
+        ToolKind::Pencil => hint(ui.ctx(),"Pencil",Command::Pencil),
+        ToolKind::Eraser => hint(ui.ctx(),"Eraser",Command::Eraser),
+        ToolKind::VectorSelect => hint(ui.ctx(),"Vector selection",Command::VectorSelect),
+        _ => tool.label().into(),
     })
 }
 

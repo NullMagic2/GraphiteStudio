@@ -6,3 +6,4 @@ pub mod performance;
 pub mod project;
 pub mod pencil_gallery;
 pub mod pencil_settings;
+pub mod shortcuts;

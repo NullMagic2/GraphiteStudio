@@ -10,8 +10,13 @@ struct LayerDrag(u64);
 pub enum LayerPanelAction {
     None,
     Activate(usize),
+    Select { index: usize, toggle: bool, range: bool },
+    SetMultiple(bool),
     Add,
     RemoveActive,
+    MergeDown,
+    MergeSelected,
+    CopyActive,
     MoveActiveUp,
     MoveActiveDown,
     SetVisible {
@@ -79,6 +84,27 @@ pub fn show_layer_panel(ui: &mut egui::Ui, document: &Document) -> LayerPanelAct
         }
     });
 
+    let selected=document.selected_layer_indices();
+    let mut multiple=document.layer_selection.multiple;
+    let toggle=ui.checkbox(&mut multiple,"Select multiple").on_hover_text("Tap layer names to add/remove them from the selection without a keyboard.");
+    #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("test_layer_multiple"),toggle.rect));
+    if toggle.changed() { action=LayerPanelAction::SetMultiple(multiple); }
+    let many=selected.len()>1;
+    ui.horizontal(|ui| {
+    let merge = ui.add_enabled(if many {document.can_merge_selected()}else{document.can_merge_down()}, egui::Button::new(if many {format!("Merge selected ({})",selected.len())}else{"Merge down".into()}).min_size(egui::vec2(160., 40.)))
+        .on_hover_text(if many {"Combine selected visible layers in one step at the highest selected position. Unselected layers stay separate. Undo restores all layers and paths."} else {"Merge the active layer with the visible layer below. Undo restores layers and editable paths. Make both layers visible first."});
+    #[cfg(test)]
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("test_merge_down"), merge.rect));
+    if merge.clicked() { action = if many {LayerPanelAction::MergeSelected}else{LayerPanelAction::MergeDown}; }
+    let copy=ui.add_enabled_ui(document.layer_count()<256,|ui| action_icons::button_sized(ui,ActionIcon::CopyLayer,"Copy layer",false,egui::vec2(48.,48.))).inner;
+    if copy.clicked(){action=LayerPanelAction::CopyActive;}
+    });
+    if many {
+        ui.small(format!("{} selected · drawing and opacity use the active layer",selected.len()));
+        if selected.windows(2).any(|p|p[1]!=p[0]+1) { ui.small("Merging moves the selected layers above any layers between them."); }
+        if !document.can_merge_selected() { ui.small("Show all selected layers to merge them."); }
+    }
+
     let active_layer = &document.layers[document.active_layer_index()];
     let mut mode = active_layer.blend_mode;
     egui::ComboBox::from_id_salt("active_layer_blend_mode")
@@ -105,7 +131,7 @@ pub fn show_layer_panel(ui: &mut egui::Ui, document: &Document) -> LayerPanelAct
             opacity: (percent * 255. / 100.).round().clamp(0., 255.) as u8,
         };
     }
-    ui.small("Drag layer names to reorder");
+    ui.small("Ctrl-click: select multiple · Shift-click: select a range. Drag names to reorder.");
     ui.separator();
     egui::ScrollArea::vertical()
         .id_salt("layer_list_scroll")
@@ -127,13 +153,14 @@ pub fn show_layer_panel(ui: &mut egui::Ui, document: &Document) -> LayerPanelAct
                     }
                     let response = ui
                         .add_sized(
-                            [ui.available_width(), 28.0],
+                            [ui.available_width(), if multiple {44.0}else{28.0}],
                             egui::Button::new(format!(
-                                "{} · {:.0}%",
+                                "{} · {:.0}%{}",
                                 layer.name,
-                                layer.opacity as f32 * 100. / 255.
+                                layer.opacity as f32 * 100. / 255.,
+                                if active && many {" · active"}else{""}
                             ))
-                            .selected(active)
+                            .selected(selected.contains(&index))
                             .sense(egui::Sense::click_and_drag())
                             .truncate(),
                         )
@@ -143,7 +170,9 @@ pub fn show_layer_panel(ui: &mut egui::Ui, document: &Document) -> LayerPanelAct
                             "Make layer active"
                         });
                     if response.clicked() {
-                        action = LayerPanelAction::Activate(index);
+                        let modifiers=ui.input(|i|i.modifiers);
+                        let toggle=modifiers.ctrl || modifiers.command || multiple;
+                        action = if toggle || modifiers.shift { LayerPanelAction::Select {index,toggle,range:modifiers.shift} } else {LayerPanelAction::Activate(index)};
                     }
                     response.dnd_set_drag_payload(LayerDrag(layer.id));
                     #[cfg(test)]

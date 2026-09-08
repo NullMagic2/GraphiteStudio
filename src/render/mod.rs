@@ -5,5 +5,6 @@ mod renderer;
 
 pub use display_pyramid::GpuDisplayPyramid;
 pub use raster::layer_pixel_rgba;
+pub(crate) use raster::merge_layer_pixel;
 pub use raster::RasterRenderer;
 pub use renderer::DocumentRenderer;

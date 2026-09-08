@@ -4,6 +4,7 @@ use eframe::egui::{self, Color32, Rect, Shape, Stroke};
 pub enum ActionIcon {
     Layers,
     AddLayer,
+    CopyLayer,
     DeleteLayer,
     Close,
     Plus,
@@ -15,6 +16,8 @@ pub enum ActionIcon {
     Fullscreen,
     Undo,
     Redo,
+    MirrorHorizontal,
+    MirrorVertical,
 }
 
 pub fn paint(p: &egui::Painter, rect: Rect, icon: ActionIcon, color: Color32) {
@@ -24,6 +27,17 @@ pub fn paint(p: &egui::Painter, rect: Rect, icon: ActionIcon, color: Color32) {
         p.line_segment([pt(a.0, a.1), pt(b.0, b.1)], Stroke::new(1.5, color));
     };
     match icon {
+        ActionIcon::MirrorHorizontal | ActionIcon::MirrorVertical => {
+            let point=|x:f32,y:f32|if matches!(icon,ActionIcon::MirrorVertical){pt(y,x)}else{pt(x,y)};
+            p.line_segment([point(12.,2.),point(12.,22.)],Stroke::new(1.,color));
+            for (x,d) in [(3.,1.),(21.,-1.)] {
+                p.add(Shape::closed_line(vec![point(x,12.),point(x+6.*d,6.),point(x+6.*d,18.)],Stroke::new(1.5,color)));
+            }
+        }
+        ActionIcon::CopyLayer => {
+            p.add(Shape::line(vec![pt(7.,17.),pt(3.,17.),pt(3.,3.),pt(17.,3.),pt(17.,7.)],Stroke::new(1.5,color)));
+            p.rect_stroke(Rect::from_min_max(pt(7.,7.),pt(21.,21.)),0.,Stroke::new(1.5,color),egui::StrokeKind::Inside);
+        }
         ActionIcon::Undo | ActionIcon::Redo => {
             let point = |x:f32,y:f32| pt(if matches!(icon,ActionIcon::Redo){24.-x}else{x},y);
             p.add(egui::epaint::CubicBezierShape::from_points_stroke(

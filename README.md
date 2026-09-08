@@ -4,20 +4,17 @@
 
 Graphite Studio models how a pencil contacts paper, deposits pigment, wears down and blends with existing marks. Pressure and tilt shape the stroke; paper tooth and the contacting pencil surface create its texture. Choose graphite tones or your own colors, then work with layers and editable stroke paths.
 
-**Current version: v0.23.6** · [Release history](RELEASE_HISTORY.md) · [MIT license](LICENSE)
+**Current version: v0.23.9** · [Release history](RELEASE_HISTORY.md) · [MIT license](LICENSE)
 
 ## Features
 
 - **Expressive pencils:** pressure-sensitive width and tone, tilt shading, adjustable sharpness, gradual tip wear, line smoothing and hold-to-straighten. Core diameter reaches 200 px.
 - **Custom pencil gallery:** import sampled ABR tips, organize folder collections and save independent settings for each pencil. Imported shapes use the graphite material renderer.
-- **Drawing tools:** Pencil, Smudge, Tissue, vinyl and kneaded erasers, textured geometric shapes, free selection and individual stroke selection.
+- **Drawing tools:** Pencil, Smudge, Tissue, vinyl and kneaded erasers with diameters up to 200 px, textured geometric shapes, free selection and individual stroke selection.
 - **Editable artwork:** move, resize and rotate retained stroke paths; confirm or cancel transforms and undo changes. Layers support drag ordering, visibility, opacity and blend modes, with Multiply as the default.
 - **Flexible workspace:** multiple drawing tabs, resizable and collapsible panels, custom paper dimensions, DPI, textures and color, portrait/landscape orientation, fit-to-screen and fullscreen drawing.
 - **Pen and touch:** selectable Windows Ink and Wintab input, pressure calibration, and canvas pinch, pan and rotation when the device or bridge forwards those gestures.
 - **GPU acceleration:** Vulkan or DirectX 12 compute for eligible pencil and eraser strokes, with bounded buffers and CPU fallback. The display preserves texture with antialiasing and linear-light downsampling.
-
-- <img width="3826" height="2054" alt="image" src="https://github.com/user-attachments/assets/db612692-42a9-4dff-9061-12aca21becbd" />
-
 
 ## Run on Windows
 
@@ -37,6 +34,8 @@ When updating, keep these files beside the executable if present:
 | `pencil.settings` | Settings for each pencil, including width response and line smoothing |
 | `Pencils.gallery` | Pencil presets, collections and imported tips |
 | `Graphite-Studio.settings.json` | Application acceleration preference |
+
+File and folder pickers open as owned dialogs over the application, following its current monitor on Windows.
 
 Save drawings before closing the app; drawing tabs are not automatically restored on restart.
 
@@ -65,10 +64,14 @@ The textured artwork in a PSD remains on pixel layers. Photoshop-native vector a
 | Pan paper | Right drag, middle drag, **Space + left drag**, or two-finger drag |
 | Rotate the paper view | **R** and drag, or two-finger twist |
 | Snap paper rotation to cardinal directions | Hold **Shift** while rotating |
-| Snap a geometric line to 15° increments | Hold **Shift** with the Line tool |
+| Snap a geometric line to 15° increments | Enable **Snap shape**, or hold **Shift**, with the Line tool |
 | Exit fullscreen | **Esc** |
 
-Use the lasso icon for a free selection. Holding Shift also constrains supported shape proportions. Text fields retain normal typing behavior.
+Cancel, Esc, or switching tools during a transform restores the original artwork and clears the selection. Use the checkmark or Enter to keep a transform before switching tools.
+
+Use the lasso icon for a free selection. The green checkmark beside the selection confirms and deselects; the red X cancels and leaves the selection tool. Switching tools also cancels and clears the selection. Enable **Keep aspect ratio** in the transform controls to resize proportionally without Shift. Holding Shift also constrains supported shape proportions. Text fields retain normal typing behavior.
+
+Tissue supports sizes up to **200 px** and a **Random graphite** control for varying the density of its stain while retaining the chosen pencil color. At 0%, it keeps uniform loading. Eraser diameter also reaches **200 px** at any document DPI.
 
 ## Build from source
 
@@ -94,7 +97,7 @@ cargo run --release --locked --bin gpu_stroke_check -- --one --integrated --disp
 
 The GPU check requires a compatible hardware adapter. It exercises material rendering, compares CPU/GPU output and checks undo/redo. The `--display` timings include shading, upload and GPU mip completion, but exclude window presentation and pen/bridge latency. It writes diagnostic images two directories above the repository root.
 
-The v0.23.6 regression suite passed **169 tests**. Hardware checks covered Vulkan and DirectX 12 on Radeon hardware; Intel hardware was not available for direct testing. See the [release measurements](RELEASE_HISTORY.md#v0236) for workloads and timing limits.
+The v0.23.9 regression suite passed **176 tests**. Hardware checks covered Vulkan and DirectX 12 on Radeon hardware; Intel hardware was not available for direct testing. See the [release measurements](RELEASE_HISTORY.md#v0236) for workloads and timing limits.
 
 ## Compatibility and scope
 

@@ -256,7 +256,7 @@ impl GraphiteApp {
                 let points = self
                     .settings
                     .shape
-                    .points_with_snap(Vec2::new(start.x, start.y), Vec2::new(end.x, end.y), ui.input(|i| i.modifiers.shift));
+                    .points_with_snap(Vec2::new(start.x, start.y), Vec2::new(end.x, end.y), self.settings.snap_shape(ui.input(|i| i.modifiers.shift)));
                 let mut settings = self.settings.clone();
                 settings.tool = ToolKind::Pencil;
                 // Scale the current physical pencil footprint to the requested outline width.
@@ -430,7 +430,7 @@ impl GraphiteApp {
             layers_panel_width: 250.,
             fit_requested: true,
             sidebar_statistics: (0, 0.0, 0.0),
-            status: "Ready. Graphite Studio v0.23.7".to_owned(),
+            status: "Ready. Graphite Studio v0.23.8".to_owned(),
         }
     }
 
@@ -1412,7 +1412,7 @@ impl GraphiteApp {
                 let points = self
                     .settings
                     .shape
-                    .points_with_snap(Vec2::new(start.x, start.y), Vec2::new(end.x, end.y), ui.input(|i| i.modifiers.shift));
+                    .points_with_snap(Vec2::new(start.x, start.y), Vec2::new(end.x, end.y), self.settings.snap_shape(ui.input(|i| i.modifiers.shift)));
                 let points = points
                     .into_iter()
                     .map(|p| self.viewport.document_to_screen(canvas_rect, p))

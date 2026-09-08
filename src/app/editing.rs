@@ -70,6 +70,8 @@ impl GraphiteApp {
                 self.cancel_transform_and_deselect();
             }
         });
+        ui.checkbox(&mut self.settings.transform_keep_aspect, "Keep aspect ratio")
+            .on_hover_text("Preserve the selection's proportions while resizing. Shift also constrains resizing.");
         ui.separator();
     }
 
@@ -418,10 +420,10 @@ impl GraphiteApp {
                             - vector::rotate(start, original.center(), -t.angle);
                         let anchor = corners(original)[(index + 2) % 4];
                         let mut moving = corners(original)[index] + delta;
-                        if ui.input(|i| i.modifiers.shift) {
+                        if self.settings.transform_keep_aspect || ui.input(|i| i.modifiers.shift) {
                             let ratio = original.width() / original.height();
                             let v = moving - anchor;
-                            let h = v.y.abs().max(v.x.abs() / ratio);
+                            let h = v.y.abs().max(v.x.abs() / ratio).max(1.).max(1. / ratio);
                             moving = anchor
                                 + Vec2::new(
                                     if v.x < 0. { -h * ratio } else { h * ratio },
@@ -673,13 +675,13 @@ impl GraphiteApp {
             for (name,help) in [
                 ("Pencil","Draw graphite with pressure and tilt. Hold the tip still for about 0.65 seconds to straighten the stroke, adjust its endpoint, then lift. Disable Hold to straighten in Pencil controls if preferred. Line smoothing reduces wobble; 0% switches it off."),
                 ("Pencil gallery / ABR","Open Pencil gallery to import ABR tips, save current pencil settings, and organize named pencils in folders. Imported samples become graphite contact relief with the pencil's pressure, tilt and paper response. Photoshop stamp dynamics and computed brushes are not imported."),
-                ("Tissue","A preloaded tissue lays down a broad, soft graphite stain. Lower Graphite load for gentle shading; repeated passes deepen it."),
+                ("Tissue","A preloaded tissue lays down a broad, soft graphite stain. Lower Graphite load for gentle shading; repeated passes deepen it. Random graphite varies density in soft patches while keeping the chosen color."),
                 ("Smudge / Eraser","Smudge moves existing graphite. Eraser lift 100% fully clears the contacted material on the active layer."),
-                ("Shapes","Choose Line, Circle, Triangle or Square. Outlines use the current pencil texture and color. Shape opacity adjusts new outlines independently of layer opacity. Drag to preview and release to commit. Hold Shift to snap lines to 45-degree increments or make triangles equilateral; circles and squares keep equal proportions. Esc cancels."),
+                ("Shapes","Choose Line, Circle, Triangle or Square. Outlines use the current pencil texture and color. Shape opacity adjusts new outlines independently of layer opacity. Drag to preview and release to commit. Enable Snap shape for lines at 15-degree increments without a modifier. Hold Shift to snap lines or make triangles equilateral; circles and squares keep equal proportions. Esc cancels."),
                 ("Vector selection · V","Click a stroke on the active layer to show its resize and rotation handles. Drag inside to move, corners to resize, or the round handle to rotate. Enter applies; Esc cancels. Other paths keep their geometry."),
                 ("Free selection","Trace around marks and release to show transform handles automatically. Applying a pixel transform flattens paths on that layer; Cancel or Undo preserves/restores them. Ctrl+D deselects."),
                 ("Orientation","Page picture buttons beside paper size set the next drawing orientation. Canvas has matching Portrait/Landscape buttons for the current drawing, including artwork. Ctrl+Z undoes it. Shift while rotating snaps to the four cardinal angles."),
-                ("Ctrl+T / Ctrl+R — Transform","Choose an Editable path to move or resize its geometry and redraw the graphite. With no selection, all paths transform together. Free selections transform pixels and flatten paths on that layer. Drag inside the box to move; drag a corner to resize. Ctrl+R rotates by dragging around the center, or use the angle control. Shift preserves proportions or snaps rotation to 90°. Enter applies; Esc cancels. Ctrl+Z restores the result."),
+                ("Ctrl+T / Ctrl+R — Transform","Choose an Editable path to move or resize its geometry and redraw the graphite. With no selection, all paths transform together. Free selections transform pixels and flatten paths on that layer. Drag inside the box to move; drag a corner to resize. Ctrl+R rotates by dragging around the center, or use the angle control. Keep aspect ratio preserves proportions when resizing. Shift also constrains resizing or snaps rotation to 90°. Enter applies; Esc cancels. Ctrl+Z restores the result."),
                 ("Save and reopen","Ctrl+S saves an editable PSD or .graphite project; Ctrl+Shift+S saves a copy; Ctrl+O opens one in a tab. PSD includes native Photoshop paths and hidden native shape alternatives, plus material state for reopening here. PNG/JPEG/BMP are image exports."),
                 ("EasyCanvas","Two-finger drag pans, pinch zooms, and twist rotates the paper view. P or B selects Pencil; E selects Eraser. R selects mouse view rotation; drag around the center, then press R or Esc to return. Fullscreen shows the whole drawing; Esc exits."),
             ]{ui.strong(name);ui.label(help);ui.add_space(7.);}
@@ -845,6 +847,46 @@ mod tests {
             assert_eq!(before, a.renderer.rgba8(&a.document));
             assert!(Arc::ptr_eq(&original, &a.document.layers[0].vectors));
         }}
+    }
+
+    #[test]
+    fn aspect_lock_and_shift_resize_vectors_and_pixels_on_rotated_paper() {
+        for pixels in [false, true] {
+          for (lock, shift) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut a = app();
+            let ctx = egui::Context::default();
+            draw(&mut a, &ctx, Pos2::new(50., 80.), Pos2::new(130., 100.));
+            let before = a.renderer.rgba8(&a.document);
+            if pixels {
+                a.document.selection.set(vec![Vec2::new(30., 60.), Vec2::new(160., 60.), Vec2::new(160., 130.), Vec2::new(30., 130.)], a.document.spec.width_px, a.document.spec.height_px);
+            }
+            a.settings.transform_keep_aspect = lock;
+            a.viewport.rotation = 0.31;
+            let _ = ctx.run_ui(Default::default(), |ui| a.begin_transform(ui.ctx()));
+            let t = a.editing.transform.as_mut().unwrap();
+            assert_eq!(t.vectors.is_none(), pixels);
+            t.angle = 0.23;
+            let original = t.target;
+            let angle = t.angle;
+            let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::splat(236.));
+            let from = vector::rotate(original.right_bottom(), original.center(), angle);
+            let to = vector::rotate(original.right_bottom() + Vec2::new(15., 30.), original.center(), angle);
+            for (point, pressed, released) in [(from, true, false), (to, false, false), (to, false, true)] {
+                let screen = a.viewport.document_to_screen(canvas, point.to_vec2());
+                let _ = ctx.run_ui(egui::RawInput { modifiers: egui::Modifiers { shift, ..Default::default() }, ..Default::default() }, |ui| a.handle_drawing_input(ui, canvas, PointerFrame {
+                    position: Some(screen), primary_pressed: pressed, primary_down: !released, primary_released: released, ..Default::default()
+                }));
+            }
+            let result = a.editing.transform.as_ref().unwrap().target;
+            assert!(result.height() > original.height() + 10.);
+            let ratio_error = (result.aspect_ratio() - original.aspect_ratio()).abs();
+            if lock || shift { assert!(ratio_error < 0.001); } else { assert!(ratio_error > 0.1); }
+            a.apply_transform();
+            assert_ne!(a.renderer.rgba8(&a.document), before);
+            assert!(a.history.undo(&mut a.document));
+            assert_eq!(a.renderer.rgba8(&a.document), before);
+          }
+        }
     }
 
     #[test]
@@ -1584,13 +1626,15 @@ mod tests {
         assert!((red / green - 4.5).abs() < 0.001);
     }
     #[test]
-    fn shape_shift_at_release_controls_saved_geometry_on_rotated_paper() {
+    fn shape_checkbox_and_shift_control_saved_geometry_on_rotated_paper() {
         for kind in crate::core::shapes::ShapeKind::ALL {
             for snap in [false, true] {
+              for checkbox in [false, true] {
                 let mut a = app();
                 let ctx = egui::Context::default();
                 a.settings.tool = ToolKind::Shapes;
                 a.settings.shape = kind;
+                a.settings.shape_line_snap = checkbox;
                 a.viewport.rotation = 0.47;
                 a.viewport.zoom = 1.2;
                 let canvas = Rect::from_min_size(Pos2::new(25., 40.), Vec2::splat(300.));
@@ -1613,7 +1657,7 @@ mod tests {
                 }
                 assert_eq!(a.document.layers[0].vectors.strokes.len(), 1);
                 let points = &a.document.layers[0].vectors.strokes[0].points;
-                let expected = kind.points_with_snap(start, end, snap);
+                let expected = kind.points_with_snap(start, end, snap || (checkbox && kind == crate::core::shapes::ShapeKind::Line));
                 assert_eq!(points.len(), expected.len());
                 for (point, expected) in points.iter().zip(expected) {
                     assert!((Vec2::new(point.x, point.y) - expected).length() < 0.001, "{kind:?}, snap {snap}");
@@ -1624,6 +1668,7 @@ mod tests {
                 assert_eq!(a.renderer.rgba8(&a.document), before);
                 assert!(a.history.redo(&mut a.document));
                 assert_eq!(a.renderer.rgba8(&a.document), finished);
+              }
             }
         }
     }

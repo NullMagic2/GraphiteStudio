@@ -86,12 +86,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (ToolKind::Eraser, 200., 8., 0.6),
             (ToolKind::Eraser, 200., 8., 1.),
             (ToolKind::Tissue, 400., 8., 0.6),
+            (ToolKind::Tissue, 200., 8., 1.),
             (ToolKind::Pencil, 100., 65., 0.7),
             (ToolKind::Pencil, 100., 8., 0.7),
             (ToolKind::Pencil, 200., 8., 0.7),
             (ToolKind::Pencil, 200., 65., 0.7),
             (ToolKind::Eraser, 200., 8., 0.75),
         ] {
+            if args.iter().any(|a| a == "--tissue-only") && tool != ToolKind::Tissue { continue; }
             if args.iter().any(|a| a == "--large-paper")
                 && !(tool == ToolKind::Pencil && size == 200. && strength == 0.7 && tilt == 65.)
             {
@@ -113,6 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     graphite_studio::core::pencil::EraserKind::Vinyl
                 },
                 tissue_size_px: size,
+                tissue_random_graphite: if tool == ToolKind::Tissue && strength == 1. { 1. } else { 0. },
                 ..Default::default()
             };
             let spec = if args.iter().any(|a| a == "--large-paper") {

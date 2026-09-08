@@ -17,7 +17,8 @@ fn main() {
         let mut doc = Document::new(spec, PaperPreset::DrawingMedium, "White", vec![[1.; 3]; n]);
         let settings = ToolSettings {
             tool: ToolKind::Tissue,
-            tissue_size_px: size,
+                tissue_size_px: size,
+                tissue_random_graphite: if std::env::args().any(|a| a == "--random") { 1. } else { 0. },
             ..Default::default()
         };
         let mut engine = StrokeEngine::default();
@@ -57,7 +58,7 @@ fn main() {
                 image::ColorType::Rgba8,
             )
             .unwrap();
-            if let Some(reference) = std::env::args().nth(2) {
+            if let Some(reference) = std::env::args().nth(2).filter(|a| !a.starts_with("--")) {
                 let before = image::open(format!("{reference}-{size:.0}.png"))
                     .unwrap()
                     .to_rgba8()

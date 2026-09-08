@@ -62,6 +62,10 @@ pub fn apply(
     let mut changed = false;
     let inv_radius2 = 4. / (size * size);
     let work_scale = p * settings.flow * strength * travel / size.max(1.);
+    let random = if tissue { settings.tissue_random_graphite.clamp(0., 1.) } else { 0. };
+    // Smooth patches in physical paper coordinates, mixed with existing fine grain.
+    // No input-time RNG: replay, saved strokes and repeated passes stay stable.
+    let patch_scale = 25.4 / (doc.spec.dpi * 3.);
     for y in y0..y1 {
         let dy = y as f32 + 0.5 - point.y;
         let row_radius2 = dy * dy * inv_radius2;
@@ -92,7 +96,15 @@ pub fn apply(
             let grain = doc.color_grain[i] as f32 / 255.;
             let capacity = doc.surface.local_capacity(i);
             let remaining = (capacity - doc.surface.total_deposit(i)).max(0.);
-            let work = coverage * work_scale * (0.8 + 0.2 * support);
+            let mut work = coverage * work_scale * (0.8 + 0.2 * support);
+            if random > 0. {
+                let patch = super::contact::contact_grain(
+                    (x as f32 + 0.5) * patch_scale + 17.3,
+                    (y as f32 + 0.5) * patch_scale + 31.7,
+                );
+                let density = patch * 0.8 + grain * 0.2;
+                work *= 1. + random * (density * 2. - 1.) * 0.95;
+            }
             let amount = remaining * (-(-work).exp_m1());
             if amount <= 1e-8 {
                 continue;
@@ -112,4 +124,45 @@ pub fn apply(
         }
     }
     changed.then_some(DirtyRect::new(x0, y0, x1, y1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{document::CanvasSpec, history::History, paper::PaperPreset};
+    #[test]
+    fn random_tissue_is_repeatable_varies_density_preserves_color_and_undo() {
+        let spec = CanvasSpec::from_physical("Tissue", 54., 54., 120.);
+        let n = spec.pixel_count();
+        let blank = Document::new(spec, PaperPreset::DrawingMedium, "White", vec![[1.; 3]; n]);
+        let mut settings = ToolSettings { tool: ToolKind::Tissue, tissue_size_px: 200., tissue_load: 0.6, pencil_color_rgb: [160, 40, 80], particle_variation: 0., ..Default::default() };
+        let point = StrokePoint { x: 128., y: 128., pressure: 1., tilt_deg: 8., azimuth_deg: 20., rotation_deg: None };
+        let mut uniform = blank.clone();
+        apply(&mut uniform, &settings, point, 10., &mut EditTransaction::default()).unwrap();
+        settings.tissue_random_graphite = 1.;
+        let mut random = blank.clone();
+        let mut tx = EditTransaction::default();
+        apply(&mut random, &settings, point, 10., &mut tx).unwrap();
+        let mut replay = blank.clone();
+        apply(&mut replay, &settings, point, 10., &mut EditTransaction::default()).unwrap();
+        assert_eq!(random.surface.graphite_mass, replay.surface.graphite_mass);
+        let (mut lighter, mut darker) = (0, 0);
+        for i in 0..n {
+            if uniform.surface.graphite_mass[i] > 1e-5 {
+                let ratio = random.surface.graphite_mass[i] / uniform.surface.graphite_mass[i];
+                assert!(ratio > 0.);
+                lighter += usize::from(ratio < 0.8);
+                darker += usize::from(ratio > 1.2);
+                assert!((random.surface.color_r_mass[i] / random.surface.color_g_mass[i] - 4.).abs() < 0.001);
+                assert!((random.surface.color_b_mass[i] / random.surface.color_g_mass[i] - 2.).abs() < 0.001);
+            }
+        }
+        assert!(lighter > 100 && darker > 100, "lighter {lighter}, darker {darker}");
+        let mut history = History::default();
+        history.push(tx, &random);
+        assert!(history.undo(&mut random));
+        assert_eq!(random.surface.graphite_mass, blank.surface.graphite_mass);
+        assert!(history.redo(&mut random));
+        assert_eq!(random.surface.graphite_mass, replay.surface.graphite_mass);
+    }
 }

@@ -435,7 +435,7 @@ impl PreparedTipContact {
 }
 
 /// Smooth, deterministic micro-topography attached to the pencil, not to input frames.
-fn contact_grain(x: f32, y: f32) -> f32 {
+pub(crate) fn contact_grain(x: f32, y: f32) -> f32 {
     fn hash(x: i32, y: i32) -> f32 {
         let mut h =
             (x as u32).wrapping_mul(0x9e3779b9) ^ (y as u32).wrapping_mul(0x85ebca6b) ^ 0x491e3197;

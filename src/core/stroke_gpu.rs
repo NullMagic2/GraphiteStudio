@@ -307,6 +307,8 @@ impl GpuStroke {
                     let size = s.tissue_size_px.clamp(0.1, 8192.) * (0.65 + 0.35 * pressure.sqrt());
                     a[40] = pressure * s.flow * (s.tissue_load * 0.20) * travel / size.max(1.);
                     a[41] = 4. / (size * size);
+                    a[42] = s.tissue_random_graphite.clamp(0., 1.);
+                    a[43] = 25.4 / (dpi * 3.);
                     contact_bounds = ContactBounds::Circle(size * 0.5 + 0.5);
                     size * 0.5 + 2.
                 }

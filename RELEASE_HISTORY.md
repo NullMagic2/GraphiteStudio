@@ -5,6 +5,7 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.23.8](#v0238)
 - [v0.23.7](#v0237)
 - [v0.23.6](#v0236)
 - [v0.23.5](#v0235)
@@ -64,6 +65,19 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.23.8
+
+- Added a persistent **Snap shape** checkbox to the Line tool. Preview and placed lines snap to 15° increments without Shift or a gesture; Shift remains available for temporary snapping.
+- Added **Keep aspect ratio** to active transform controls for proportional resizing of vector strokes and pixel selections without Shift. It also works on rotated selections and paper views; the preference is saved in projects.
+- Tissue now has a **Random graphite** density control (0–100%) for soft patches of lighter and deeper graphite in the chosen color. The pattern is deterministic for editable-stroke replay, with matching CPU/GPU calculations. Its default of 0% preserves existing strokes.
+- Set the Tissue size control maximum to 200 px. Older saved sizes remain intact until explicitly edited.
+- Increased the Eraser diameter control to 200 px for both Vinyl and Kneaded erasers. The maximum is based on document pixels at any supported DPI, replacing the old 12 mm limit (about 57 px at 120 dpi).
+- Retained the existing physical-size storage, pressure response, lift strength, CPU/GPU rendering and saved strokes. Drawing quality and document resolution are unchanged.
+- Checked the size-control behavior at 36, 120, 300 and 600 dpi. The rendering paths already support erasers of 200 px and larger.
+- All 174 regression tests pass, including modifier-free snapping, proportional vector/pixel resizing on rotated paper, native/PSD setting round trips, tissue density/color checks and exact undo/redo. Older settings default to the previous behavior.
+- The release-engine tissue benchmark at 200 px averaged 0.59 ms per segment with uniform loading and 0.85 ms with Random graphite at 100%, over 60 segments. These are material-engine times, excluding display rendering and input latency.
+- Radeon RX 7900 XTX Vulkan checks confirm randomized and uniform tissue GPU results stay within 1/255 per visible color channel of CPU rendering, with exact undo/redo and selection clipping. Normal tissue rendering retains the faster CPU path.
 
 ## v0.23.7
 

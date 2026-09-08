@@ -204,6 +204,7 @@ pub(crate) fn settings_valid(s: &ToolSettings) -> bool {
             s.eraser_strength,
             s.line_smoothing,
             s.tissue_load,
+            s.tissue_random_graphite,
         ]
         .iter()
         .all(|v| v.is_finite() && v.abs() < 1e6)
@@ -503,6 +504,9 @@ mod tests {
         let engine = StrokeEngine::default();
         let mut settings = ToolSettings::default();
         settings.tool = ToolKind::Brush;
+        settings.tissue_random_graphite = 0.73;
+        settings.shape_line_snap = true;
+        settings.transform_keep_aspect = true;
         settings.pencil_color_rgb = [180, 30, 70];
         settings.brush_tip = Some(Arc::new(BrushTip {
             name: "Embedded".into(),
@@ -585,6 +589,11 @@ mod tests {
         std::env::temp_dir().join(format!("graphite-test-{}-{name}", std::process::id()))
     }
     fn assert_same(a: &Project, b: &Project) {
+        assert_eq!(b.settings.tissue_random_graphite, a.settings.tissue_random_graphite);
+        assert!(b.settings.shape_line_snap);
+        assert!(b.settings.transform_keep_aspect);
+        assert!(b.document.layers[0].vectors.strokes[0].settings.shape_line_snap);
+        assert_eq!(b.document.layers[0].vectors.strokes[0].settings.tissue_random_graphite, 0.73);
         assert_eq!(
             a.document.surface.graphite_mass,
             b.document.surface.graphite_mass

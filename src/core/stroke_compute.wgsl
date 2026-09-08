@@ -133,7 +133,13 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         }
         if coverage<=1e-5{continue;}
         if d.v[36]==2. {
-            let work=coverage*d.v[40]*(0.8+0.2*pixel.v[13]);let amount=max(capacity-total,0.)*(1.-exp(-work));if amount<=1e-8{continue;}
+            var work=coverage*d.v[40]*(0.8+0.2*pixel.v[13]);
+            if d.v[42]>0. {
+                let density_patch=contact_grain(position*d.v[43]+vec2(17.3,31.7));
+                let density=density_patch*0.8+(f32(u32(pixel.v[14])&255u)/255.)*0.2;
+                work*=1.+d.v[42]*(density*2.-1.)*0.95;
+            }
+            let amount=max(capacity-total,0.)*(1.-exp(-work));if amount<=1e-8{continue;}
             pixel.v[2]+=amount*d.v[21];pixel.v[3]+=amount*d.v[22];pixel.v[4]+=amount*d.v[23];pixel.v[5]+=amount*0.85;pixel.v[6]+=amount*0.15;
             let tone=1.+(f32(u32(pixel.v[14])&255u)/255.-0.5)*d.v[31]*0.3;
             for(var c=0u;c<3u;c++){pixel.v[9u+c]+=amount*clamp(d.v[28u+c]*tone,0.,1.);}continue;

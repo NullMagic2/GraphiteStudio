@@ -83,7 +83,8 @@ pub fn show_tool_panel(
         ToolKind::Tissue => {
             ui.small("A graphite-loaded tissue stains the active layer with a soft wash. Build tone with repeated passes.");
             ui.add(
-                egui::Slider::new(&mut settings.tissue_size_px, 10.0..=800.0)
+                egui::Slider::new(&mut settings.tissue_size_px, 10.0..=200.0)
+                    .clamping(egui::SliderClamping::Edits)
                     .text("Size")
                     .suffix(" px"),
             );
@@ -98,6 +99,13 @@ pub fn show_tool_panel(
             {
                 settings.tissue_load = load / 100.;
             }
+            let mut random = settings.tissue_random_graphite * 100.;
+            if ui.add(egui::Slider::new(&mut random, 0.0..=100.0)
+                .text("Random graphite").suffix("%"))
+                .on_hover_text("Vary graphite density in soft patches while keeping the chosen color. 0% preserves uniform loading.")
+                .changed() {
+                settings.tissue_random_graphite = random / 100.;
+            }
             ui.add(egui::Slider::new(&mut settings.flow, 0.0..=2.0).text("Flow"));
         }
         ToolKind::Shapes => {
@@ -108,6 +116,10 @@ pub fn show_tool_panel(
                         ui.selectable_value(&mut settings.shape, kind, kind.label());
                     }
                 });
+            if settings.shape == crate::core::shapes::ShapeKind::Line {
+                ui.checkbox(&mut settings.shape_line_snap, "Snap shape")
+                    .on_hover_text("Snap lines to 15° increments without holding Shift.");
+            }
             ui.add(
                 egui::Slider::new(&mut settings.shape_width_px, 1.0..=80.0)
                     .text("Stroke")
@@ -317,7 +329,7 @@ pub fn show_tool_panel(
             size_in_pixels(
                 ui,
                 &mut settings.eraser_diameter_mm,
-                0.8..=12.0,
+                0.8..=(200.0 * 25.4 / document.spec.dpi),
                 document.spec.dpi,
                 "Eraser diameter (px)",
             );
@@ -385,14 +397,14 @@ mod tests {
     use super::*;
     #[test]
     fn displaying_pixel_controls_does_not_quantize_physical_sizes() {
-        for dpi in [120.0, 300.0] {
+        for dpi in [36.0, 120.0, 300.0, 600.0] {
             let ctx = egui::Context::default();
             let mut pencil = 2.037_f32;
             let mut eraser = 6.179_f32;
             for _ in 0..3 {
                 let _ = ctx.run_ui(Default::default(), |ui| {
                     size_in_pixels(ui, &mut pencil, 1.5..=4.0, dpi, "Core diameter (px)");
-                    size_in_pixels(ui, &mut eraser, 0.8..=12.0, dpi, "Eraser diameter (px)");
+                    size_in_pixels(ui, &mut eraser, 0.8..=(200.0 * 25.4 / dpi), dpi, "Eraser diameter (px)");
                 });
             }
             assert_eq!(pencil, 2.037);

@@ -543,7 +543,14 @@ pub struct ToolSettings {
     pub brush_angle_deg: f32,
     pub tissue_size_px: f32,
     pub tissue_load: f32,
+    /// Spatial graphite-density variation; zero preserves legacy tissue strokes.
+    #[serde(default)]
+    pub tissue_random_graphite: f32,
     pub shape: super::shapes::ShapeKind,
+    #[serde(default)]
+    pub shape_line_snap: bool,
+    #[serde(default)]
+    pub transform_keep_aspect: bool,
     pub shape_width_px: f32,
     /// Opacity of a completed geometric outline, independent of material flow and layer opacity.
     #[serde(default = "full_shape_opacity")]
@@ -583,7 +590,10 @@ impl Default for ToolSettings {
             brush_angle_deg: 0.,
             tissue_size_px: 100.,
             tissue_load: 0.35,
+            tissue_random_graphite: 0.,
             shape: super::shapes::ShapeKind::Line,
+            shape_line_snap: false,
+            transform_keep_aspect: false,
             shape_width_px: 3.,
             shape_opacity: 1.,
         }
@@ -599,6 +609,10 @@ fn hold_to_straighten_default() -> bool {
 }
 
 impl ToolSettings {
+    pub fn snap_shape(&self, shift: bool) -> bool {
+        shift || (self.shape == super::shapes::ShapeKind::Line && self.shape_line_snap)
+    }
+
     /// Modulates contact size without remapping material force or pigment color.
     /// At full force the original footprint is available for broad shading.
     pub fn pressure_width_scale(&self, pressure: f32) -> f32 {
@@ -711,6 +725,18 @@ mod tests {
                 .shape_opacity,
             1.
         );
+    }
+
+    #[test]
+    fn old_settings_keep_uniform_tissue_and_unconstrained_shapes_and_transforms() {
+        let mut json = serde_json::to_value(ToolSettings::default()).unwrap();
+        for field in ["tissue_random_graphite", "shape_line_snap", "transform_keep_aspect"] {
+            json.as_object_mut().unwrap().remove(field);
+        }
+        let old: ToolSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(old.tissue_random_graphite, 0.);
+        assert!(!old.shape_line_snap);
+        assert!(!old.transform_keep_aspect);
     }
 
     #[test]

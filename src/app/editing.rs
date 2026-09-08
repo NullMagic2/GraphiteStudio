@@ -11,6 +11,7 @@ pub(super) struct EditingState {
     pub transform: Option<Transform>,
     pub guide: bool,
     pub selected_path: Option<usize>,
+    action_pointer_down: bool,
 }
 pub(super) struct Transform {
     pub angle: f32,
@@ -46,33 +47,82 @@ impl GraphiteApp {
     }
 
     pub(super) fn cancel_transform_for_tool_change(&mut self) {
-        if self.editing.transform.is_some() {
-            self.cancel_transform_and_deselect();
-        }
+        self.cancel_transform_and_deselect();
     }
 
     pub(super) fn cancel_transform_and_deselect(&mut self) {
         self.cancel_transform();
+        self.clear_edit_selection();
+        self.leave_selection_tool();
+    }
+
+    fn clear_edit_selection(&mut self) {
         self.document.selection = Default::default();
         self.editing.selected_path = None;
         self.editing.vector_pick = None;
         self.editing.lasso = None;
     }
 
-    pub(super) fn show_transform_actions(&mut self, ui: &mut egui::Ui) {
-        if self.editing.transform.is_none() { return; }
-        ui.horizontal(|ui| {
-            ui.strong("Transform");
-            if crate::ui::tool_icons::transform_action_button(ui, true).clicked() {
-                self.apply_transform();
-            }
-            if crate::ui::tool_icons::transform_action_button(ui, false).clicked() {
-                self.cancel_transform_and_deselect();
-            }
-        });
-        ui.checkbox(&mut self.settings.transform_keep_aspect, "Keep aspect ratio")
-            .on_hover_text("Preserve the selection's proportions while resizing. Shift also constrains resizing.");
-        ui.separator();
+    fn leave_selection_tool(&mut self) {
+        if matches!(self.settings.tool, ToolKind::Lasso | ToolKind::VectorSelect) {
+            self.settings.tool = ToolKind::Pencil;
+        }
+    }
+
+    fn confirm_transform_and_deselect(&mut self) {
+        self.apply_transform();
+        self.leave_selection_tool();
+    }
+
+    fn selection_screen_bounds(&self, canvas: Rect) -> Option<Rect> {
+        let points = if let Some(t) = &self.editing.transform {
+            corners(t.target).map(|p| vector::rotate(p, t.target.center(), t.angle).to_vec2()).to_vec()
+        } else if !self.document.selection.polygon.is_empty() {
+            self.document.selection.polygon.clone()
+        } else {
+            let index = self.editing.selected_path?;
+            let stroke = self.document.layers[self.document.active_layer_index()].vectors.strokes.get(index)?;
+            corners(stroke.bounds(self.document.spec.dpi)).map(|p| p.to_vec2()).to_vec()
+        };
+        let bounds = points.into_iter().fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_size(self.viewport.document_to_screen(canvas, p), Vec2::ZERO)));
+        bounds.is_finite().then_some(bounds)
+    }
+
+    pub(super) fn show_transform_actions(&mut self, ui: &egui::Ui, canvas: Rect, visible: Rect) -> Option<Rect> {
+        if !ui.input(|i| i.focused) { self.editing.action_pointer_down = false; }
+        if self.gallery.open || self.paper_settings.open || self.save_as_open { return None; }
+        let bounds = self.selection_screen_bounds(canvas)?;
+        let size = Vec2::new(112., 56.);
+        let limit = visible.shrink(6.);
+        let y = if bounds.bottom() + 12. + size.y <= limit.bottom() { bounds.bottom() + 12. }
+            else if bounds.top() - 12. - size.y >= limit.top() { bounds.top() - 12. - size.y }
+            else { limit.bottom() - size.y };
+        let pos = Pos2::new(bounds.right() - size.x, y).clamp(limit.min, (limit.max - size).max(limit.min));
+        let mut action = None;
+        let response = egui::Area::new(egui::Id::new("selection_actions"))
+            .order(egui::Order::Foreground).fixed_pos(pos).movable(false).constrain(false).fade_in(false)
+            .default_size(size).show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(4.).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.;
+                    ui.horizontal(|ui| {
+                        if crate::ui::tool_icons::transform_action_button(ui, true).clicked() { action = Some(true); }
+                        if crate::ui::tool_icons::transform_action_button(ui, false).clicked() { action = Some(false); }
+                    });
+                });
+            });
+        if let Some(confirm) = action {
+            if confirm { self.confirm_transform_and_deselect(); } else { self.cancel_transform_and_deselect(); }
+            ui.ctx().request_repaint();
+        }
+        Some(response.response.rect)
+    }
+
+    pub(super) fn transform_actions_block_input(&mut self, actions: Option<Rect>, input: PointerFrame) -> bool {
+        let over = input.position.is_some_and(|p| actions.is_some_and(|r| r.contains(p)));
+        if over && input.primary_pressed { self.editing.action_pointer_down = true; }
+        let block = over || self.editing.action_pointer_down;
+        if input.primary_released { self.editing.action_pointer_down = false; }
+        block
     }
 
     fn vector_at(&self, point: Vec2) -> Option<usize> {
@@ -301,10 +351,12 @@ impl GraphiteApp {
     }
     pub(super) fn apply_transform(&mut self) {
         let Some(mut t) = self.editing.transform.take() else {
+            self.clear_edit_selection();
             return;
         };
         if t.target == t.cutout.bounds && t.angle.abs() < 1e-6 {
             t.tx.rollback(&mut self.document);
+            self.clear_edit_selection();
             return;
         }
         let vector_mode = t.vectors.is_some();
@@ -329,25 +381,7 @@ impl GraphiteApp {
                 .place_rotated(&mut self.document, t.target, t.angle, &mut t.tx);
             self.bake_paths();
         }
-        if !self.document.selection.polygon.is_empty() {
-            let polygon = self
-                .document
-                .selection
-                .polygon
-                .iter()
-                .map(|p| {
-                    let p = t.target.min.to_vec2()
-                        + (*p - t.cutout.bounds.min.to_vec2()) / t.cutout.bounds.size()
-                            * t.target.size();
-                    vector::rotate(p.to_pos2(), t.target.center(), t.angle).to_vec2()
-                })
-                .collect();
-            self.document.selection.set(
-                polygon,
-                self.document.spec.width_px,
-                self.document.spec.height_px,
-            );
-        }
+        self.clear_edit_selection();
         self.history.push(t.tx, &self.document);
         self.tabs[self.active_tab].modified = true;
         self.status = if vector_mode {
@@ -600,11 +634,7 @@ impl GraphiteApp {
                 }
             }
             7 => self.begin_rotation(ui.ctx()),
-            2 => {
-                self.cancel_transform();
-                self.editing.selected_path = None;
-                self.document.selection = Default::default();
-            }
+            2 => self.cancel_transform_and_deselect(),
             3 => {
                 self.cancel_transform();
                 self.editing.selected_path = None;
@@ -627,7 +657,7 @@ impl GraphiteApp {
                 self.cancel_transform_and_deselect();
                 self.shape_drag = None;
             }
-            5 => self.apply_transform(),
+            5 => self.confirm_transform_and_deselect(),
             6 if !self.document.selection.polygon.is_empty() => {
                 self.cancel_transform();
                 self.finish_stroke();
@@ -776,13 +806,14 @@ mod tests {
     }
 
     #[test]
-    fn transform_check_and_cross_work_for_vectors_and_pixels_with_panels_hidden() {
-        for pixels in [false, true] { for confirm in [false, true] {
+    fn transform_check_and_cross_work_for_vectors_and_pixels_with_and_without_panels() {
+        for pixels in [false, true] { for confirm in [false, true] { for moved in [false, true] {
             let mut a = app();
             let ctx = egui::Context::default();
             draw(&mut a, &ctx, Pos2::new(35., 55.), Pos2::new(90., 65.));
             let before = a.document.surface.graphite_mass.clone();
             let original = a.document.layers[0].vectors.clone();
+            a.settings.tool = if pixels { ToolKind::Lasso } else { ToolKind::VectorSelect };
             a.editing.selected_path = Some(0);
             if pixels {
                 a.document.selection.set(vec![Vec2::new(20., 30.), Vec2::new(115., 30.),
@@ -794,22 +825,35 @@ mod tests {
             preview.update(&initial);
             let t = a.editing.transform.as_mut().unwrap();
             assert_eq!(t.vectors.is_none(), pixels);
-            t.target = t.target.translate(Vec2::new(45., 60.));
-            a.material_panel_visible = false;
+            if moved { t.target = t.target.translate(Vec2::new(45., 60.)); }
+            a.material_panel_visible = pixels && confirm && moved;
             a.layers_panel_visible = false;
             a.fullscreen = pixels != confirm;
             for pass in 0..3 {
                 let output = interface_frame(&mut a, &ctx, vec![]);
                 preview.update(&output);
-                if pass == 2 && !pixels && !confirm {
-                    preview.save(&ctx, &output, "../../ui-v229-transform.png", [1440, 920]);
+                if pass == 2 && !pixels && !confirm && moved {
+                    preview.save(&ctx, &output, "../../ui-v239-transform.png", [1440, 920]);
                 }
+                if pass == 2 && a.material_panel_visible {
+                    preview.save(&ctx, &output, "../../ui-v239-tool-options.png", [1440, 920]);
+                }
+            }
+            if a.material_panel_visible {
+                let aspect = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("test_aspect_option")).unwrap());
+                assert!(aspect.right() < 400., "Aspect option must stay in the left panel");
+                click_interface(&mut a, &ctx, aspect.center());
+                assert!(a.settings.transform_keep_aspect);
             }
             let rect = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test_transform_action", confirm))).unwrap());
             assert!(rect.height() >= 44. && rect.left() >= 0. && rect.right() < 1440.);
             click_interface(&mut a, &ctx, rect.center());
             assert!(a.editing.transform.is_none());
-            if confirm {
+            assert!(a.document.selection.polygon.is_empty());
+            assert!(a.editing.selected_path.is_none());
+            assert_eq!(a.settings.tool, ToolKind::Pencil);
+            assert!(a.stroke_session.is_none(), "Button must not start a stroke");
+            if confirm && moved {
                 assert_ne!(before, a.document.surface.graphite_mass);
                 assert!(a.history.undo(&mut a.document));
             } else {
@@ -818,7 +862,66 @@ mod tests {
             }
             assert_eq!(before, a.document.surface.graphite_mass);
             assert!(Arc::ptr_eq(&original, &a.document.layers[0].vectors));
-        }}
+        }}}
+    }
+
+    #[test]
+    fn tool_switch_and_actions_clear_standalone_selection_masks() {
+        for action in 0..3 {
+            let mut a = app();
+            let ctx = egui::Context::default();
+            draw(&mut a, &ctx, Pos2::new(50., 70.), Pos2::new(100., 80.));
+            let before = a.renderer.rgba8(&a.document);
+            a.settings.tool = ToolKind::Lasso;
+            a.document.selection.set(vec![Vec2::new(30., 40.), Vec2::new(130., 40.), Vec2::new(130., 100.), Vec2::new(30., 100.)], a.document.spec.width_px, a.document.spec.height_px);
+            assert!(a.editing.transform.is_none());
+            for _ in 0..3 { interface_frame(&mut a, &ctx, vec![]); }
+            if action == 0 {
+                let pos = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test_tool_icon", ToolKind::Eraser.label()))).unwrap().center());
+                click_interface(&mut a, &ctx, pos);
+                assert_eq!(a.settings.tool, ToolKind::Eraser);
+            } else {
+                let pos = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test_transform_action", action == 1))).unwrap().center());
+                click_interface(&mut a, &ctx, pos);
+                assert_eq!(a.settings.tool, ToolKind::Pencil);
+            }
+            assert!(a.document.selection.polygon.is_empty());
+            assert!(a.document.selection.allows(0));
+            assert!(a.editing.selected_path.is_none());
+            assert!(a.editing.lasso.is_none());
+            assert!(a.stroke_session.is_none());
+            assert_eq!(before, a.renderer.rgba8(&a.document));
+        }
+    }
+
+    #[test]
+    fn floating_actions_follow_rotated_selection_and_stay_in_view() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        draw(&mut a, &ctx, Pos2::new(50., 70.), Pos2::new(100., 80.));
+        let _ = ctx.run_ui(Default::default(), |ui| a.begin_transform(ui.ctx()));
+        let canvas = Rect::from_min_size(Pos2::new(300., 100.), Vec2::splat(236.));
+        let visible = Rect::from_min_size(Pos2::new(280., 80.), Vec2::new(500., 500.));
+        for offset in [Vec2::ZERO, Vec2::new(30., 20.), Vec2::new(0., 400.), Vec2::new(-600., -600.), Vec2::new(900., 900.)] {
+            let t = a.editing.transform.as_mut().unwrap();
+            t.target = Rect::from_min_size(Pos2::new(50., 70.) + offset, Vec2::new(80., 40.));
+            t.angle = 0.4;
+            a.viewport.rotation = 0.25;
+            for _ in 0..3 {
+                let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900., 700.))), ..Default::default() }, |ui| {
+                    let rect = a.show_transform_actions(ui, canvas, visible).unwrap();
+                    assert!(visible.contains_rect(rect), "{rect:?} outside {visible:?}");
+                });
+            }
+            let rect = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test_transform_action", true))).unwrap());
+            let bounds = a.selection_screen_bounds(canvas).unwrap();
+            if offset.length() < 100. { assert!((rect.top() - bounds.bottom() - 16.).abs() < 3.); }
+            // A native pen that presses a button and leaves it must never resize/draw underneath.
+            assert!(a.transform_actions_block_input(Some(rect), PointerFrame { position: Some(rect.center()), primary_pressed: true, primary_down: true, ..Default::default() }));
+            assert!(a.transform_actions_block_input(None, PointerFrame { position: Some(Pos2::ZERO), primary_down: true, ..Default::default() }));
+            assert!(a.transform_actions_block_input(None, PointerFrame { primary_released: true, ..Default::default() }));
+            assert!(!a.transform_actions_block_input(None, PointerFrame::default()));
+        }
     }
 
     #[test]

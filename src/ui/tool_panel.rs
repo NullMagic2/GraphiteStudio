@@ -65,6 +65,7 @@ pub fn show_tool_panel(
             ui.label("Click an individual stroke on the active layer.");
             ui.label("Drag corners to resize; drag the round handle to rotate.");
             ui.label("Drag inside to move. Enter applies; Esc cancels.");
+            ui.small("The checkmark confirms and deselects. The X cancels and leaves the selection tool.");
             ui.small("V selects this tool. Paths keep their pencil texture. Choose another layer in Layers to select its strokes.");
         }
         ToolKind::Brush => {
@@ -147,7 +148,7 @@ pub fn show_tool_panel(
             ui.label("Ctrl+R · rotate");
             ui.label("Ctrl+D · deselect");
             ui.label("Delete · clear selected marks");
-            ui.small("Drawing, tissue, smudge and eraser are limited to the selected area.");
+            ui.small("The checkmark confirms and deselects. The X or another tool cancels the transform and clears the selection.");
         }
         ToolKind::Pencil => {
             if ui.button("Import ABR textures…").clicked() {

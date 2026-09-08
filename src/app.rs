@@ -430,7 +430,7 @@ impl GraphiteApp {
             layers_panel_width: 250.,
             fit_requested: true,
             sidebar_statistics: (0, 0.0, 0.0),
-            status: "Ready. Graphite Studio v0.23.8".to_owned(),
+            status: "Ready. Graphite Studio v0.23.9".to_owned(),
         }
     }
 
@@ -1360,6 +1360,8 @@ impl GraphiteApp {
             .map(|p| self.viewport.document_to_screen(canvas_rect, p));
             let native_owned = self.pressure_input.native_owns_pointer();
             let pen_frames = self.pressure_input.take_pen_frames();
+            let action_rect = self.show_transform_actions(ui, canvas_rect, view_rect);
+            let actions_block_mouse = if !native_owned { self.transform_actions_block_input(action_rect, input) } else { false };
             if input.touch_navigation && !native_owned {
                 self.shape_drag = None;
                 self.editing.lasso = None;
@@ -1374,9 +1376,11 @@ impl GraphiteApp {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             } else if native_owned {
                 for frame in pen_frames {
-                    self.handle_drawing_input(ui, canvas_rect, frame);
+                    if !self.transform_actions_block_input(action_rect, frame) {
+                        self.handle_drawing_input(ui, canvas_rect, frame);
+                    }
                 }
-            } else {
+            } else if !actions_block_mouse {
                 self.handle_drawing_input(ui, canvas_rect, input);
             }
             // Native pens may send no packets while held still. Check the hold
@@ -1430,7 +1434,7 @@ impl GraphiteApp {
                     ),
                 ));
             }
-            if !self.rotate_view {
+            if !self.rotate_view && !input.position.is_some_and(|p| action_rect.is_some_and(|r| r.contains(p))) {
                 self.paint_cursor(
                     painter,
                     view_rect,
@@ -1870,7 +1874,6 @@ impl GraphiteApp {
 
         egui::CentralPanel::default().show(ui, |ui| {
             if self.fullscreen {
-                self.show_transform_actions(ui);
                 self.draw_canvas(ui);
                 return;
             }
@@ -1903,7 +1906,6 @@ impl GraphiteApp {
             }
             if !self.preference_status.is_empty() { ui.small(&self.preference_status); }
             self.show_drawing_tabs(ui);
-            self.show_transform_actions(ui);
             ui.separator();
             let active_device_pressure = self.pressure_input.active_pressure();
             let device_pressure_seen = self.pressure_input.device_pressure_seen();
@@ -1934,6 +1936,13 @@ impl GraphiteApp {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     self.path_controls(ui);
+                                    if self.editing.transform.is_some() || matches!(self.settings.tool, ToolKind::Lasso | ToolKind::VectorSelect) {
+                                        let aspect = ui.checkbox(&mut self.settings.transform_keep_aspect, "Keep aspect ratio")
+                                            .on_hover_text("Preserve the selection's proportions while resizing. Shift also constrains resizing.");
+                                        #[cfg(test)]
+                                        ui.data_mut(|d| d.insert_temp(egui::Id::new("test_aspect_option"), aspect.rect));
+                                        let _ = aspect;
+                                    }
                                     if self.editing.transform.is_some(){
                                         ui.strong("FREE TRANSFORM");
                                         if let Some(t)=&mut self.editing.transform{

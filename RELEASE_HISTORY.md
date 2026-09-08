@@ -5,6 +5,7 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.23.9](#v0239)
 - [v0.23.8](#v0238)
 - [v0.23.7](#v0237)
 - [v0.23.6](#v0236)
@@ -65,6 +66,15 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.23.9
+
+- Confirm now clears the pixel selection mask and selected vector highlight, including when no move, resize or rotation was made. Tool switching also clears standalone selection masks without an active transform.
+- Cancel restores the original artwork, clears the selection and leaves Free selection / Vector selection for Pencil. Confirm also leaves those selection tools. Enter, Esc and Ctrl+D use the same completion/cancellation behavior.
+- Replaced the top transform action row with 48 px green-checkmark and red-X buttons beside the selection. They follow its transformed screen bounds, appear below it where space permits and stay inside the visible canvas when zoomed, panned or rotated. They remain available with the panels hidden or in fullscreen, and for standalone selections.
+- Button pointer input is kept out of the drawing engine, including native pen presses that move away before release.
+- Moved **Keep aspect ratio** into the left tool options panel, alongside the transform controls. It is also available before selecting with the free or vector selection tools.
+- All 176 regression tests pass. Real UI-event tests cover checkmark/X clicks with moved and untouched vector/pixel selections, standalone masks, tool switching, fullscreen, hidden panels and the relocated aspect checkbox. Position tests cover rotated and off-screen selections; cancellation and undo restore material and editable paths exactly. UI previews were rendered and inspected without taking over the desktop.
 
 ## v0.23.8
 

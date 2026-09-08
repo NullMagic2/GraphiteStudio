@@ -5,13 +5,13 @@ use eframe::egui::{self, Color32, Pos2, Rect, Shape, Stroke};
 /// Large pen/touch targets with vector symbols that do not depend on font glyphs.
 pub fn transform_action_button(ui: &mut egui::Ui, confirm: bool) -> egui::Response {
     let label = if confirm { "Confirm" } else { "Cancel" };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(116., 44.), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(48., 48.), egui::Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
     #[cfg(test)]
     ui.data_mut(|d| d.insert_temp(egui::Id::new(("test_transform_action", confirm)), rect));
     let visuals = ui.style().interact(&response);
     ui.painter().rect(rect.shrink(1.), 6., visuals.bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
-    let center = Pos2::new(rect.left() + 22., rect.center().y);
+    let center = rect.center();
     let stroke = Stroke::new(2.5, if confirm { Color32::from_rgb(35, 133, 76) } else { Color32::from_rgb(180, 63, 63) });
     if confirm {
         ui.painter().add(Shape::line(vec![center + egui::vec2(-8., 0.), center + egui::vec2(-2., 6.), center + egui::vec2(9., -7.)], stroke));
@@ -19,9 +19,7 @@ pub fn transform_action_button(ui: &mut egui::Ui, confirm: bool) -> egui::Respon
         ui.painter().line_segment([center + egui::vec2(-7., -7.), center + egui::vec2(7., 7.)], stroke);
         ui.painter().line_segment([center + egui::vec2(-7., 7.), center + egui::vec2(7., -7.)], stroke);
     }
-    ui.painter().text(Pos2::new(rect.left() + 40., rect.center().y), egui::Align2::LEFT_CENTER,
-        label, egui::FontId::proportional(15.), visuals.text_color());
-    response.on_hover_text(if confirm { "Keep this position, size and rotation · Enter" } else { "Restore the selection to its original position · Esc" })
+    response.on_hover_text(if confirm { "Confirm and deselect · Enter" } else { "Cancel transform and deselect · Esc" })
 }
 
 pub fn tool_button(ui: &mut egui::Ui, tool: ToolKind, selected: bool) -> egui::Response {

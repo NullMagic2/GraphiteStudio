@@ -499,7 +499,7 @@ impl GraphiteApp {
                         r.max = r.max.max(r.min + Vec2::splat(1.));
                         let center = vector::rotate(r.center(), original.center(), t.angle);
                         r = r.translate(center - r.center());
-                        if r.width() * r.height() <= 16_000_000. {
+                        if r.is_finite() {
                             t.target = r;
                         }
                     }

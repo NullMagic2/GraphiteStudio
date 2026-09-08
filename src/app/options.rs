@@ -2,6 +2,26 @@ use super::*;
 use crate::performance::{AccelerationMode, Preferences};
 
 impl GraphiteApp {
+    pub(super) fn save_preferences(&self,acceleration:Option<AccelerationMode>)->Result<(),String> {
+        // Headless test instances opt into a scratch file; production sets this at startup.
+        let Some(path)=&self.preferences_path else {return Ok(());};
+        let mut preferences=Preferences::load_from(path).unwrap_or_default();
+        preferences.recent_files=self.recent_files.clone();
+        if let Some(mode)=acceleration {preferences.acceleration=mode;}
+        preferences.save_to(path)
+    }
+    pub(super) fn set_recent_files_maximum(&mut self,maximum:u8) {
+        self.recent_files.set_maximum(maximum);
+        self.preference_status=match self.save_preferences(None) {
+            Ok(())=>if self.recent_files.maximum()==0 {"Recent files disabled and cleared.".into()} else {format!("Recent files: remembering up to {} files.",self.recent_files.maximum())},
+            Err(e)=>format!("Recent files setting changed for this run, but could not be saved: {e}"),
+        };
+    }
+    pub(super) fn remember_recent_file(&mut self,path:&std::path::Path) {
+        if self.recent_files.remember(path) {
+            if let Err(e)=self.save_preferences(None) {self.preference_status=format!("Could not save the recent files list: {e}");}
+        }
+    }
     pub(super) fn set_acceleration(&mut self, mode: AccelerationMode) {
         if self.acceleration == mode {
             return;
@@ -10,9 +30,7 @@ impl GraphiteApp {
         self.display_pyramid = None;
         self.fallback_texture = None;
         self.last_texture_update = None;
-        self.preference_status = match Preferences::path()
-            .ok_or_else(|| "Cannot locate the settings folder".to_string())
-            .and_then(|p| Preferences { acceleration: mode }.save_to(&p))
+        self.preference_status = match self.save_preferences(Some(mode))
         {
             Ok(()) => {
                 if mode == self.startup_acceleration {

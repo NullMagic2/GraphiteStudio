@@ -73,6 +73,8 @@ pub enum TopbarAction {
     Fit,
     Fullscreen,
     OpenProject,
+    OpenRecent(usize),
+    RecentFilesMaximum(u8),
     SaveProject,
     SaveProjectAs,
     ApplyPaperTexture,
@@ -97,6 +99,7 @@ pub fn show_topbar(
     renderer_label: &str,
     use_wintab: bool,
     current_landscape: bool,
+    recent_files: &graphite_studio::recent_files::RecentFiles,
 ) -> TopbarAction {
     let mut action = TopbarAction::None;
     let _ = (
@@ -109,8 +112,22 @@ pub fn show_topbar(
 
     ui.horizontal_wrapped(|ui| {
         ui.menu_button("File", |ui| {
+            if recent_files.maximum()>0 {
+                ui.menu_button("Recent files",|ui| {
+                    if recent_files.files().is_empty() {ui.add_enabled(false,egui::Button::new("No recent files"));}
+                    for (index,path) in recent_files.files().iter().enumerate() {
+                        let filename=path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+                        let label:String=filename.chars().take(70).collect();
+                        let label=if filename.chars().count()>70 {format!("{label}…")}else{label};
+                        let button=ui.button(format!("{}. {label}",index+1)).on_hover_text(graphite_studio::recent_files::display_path(path));
+                        #[cfg(test)] ui.ctx().data_mut(|d|d.insert_temp(egui::Id::new(("recent_file_button",index)),button.rect));
+                        if button.clicked() {action=TopbarAction::OpenRecent(index);ui.close();}
+                    }
+                });
+                ui.separator();
+            }
             for (label, command) in [
-                (hint(ui.ctx(),"Open project…",Command::Open), TopbarAction::OpenProject),
+                (hint(ui.ctx(),"Open drawing or image…",Command::Open), TopbarAction::OpenProject),
                 (hint(ui.ctx(),"Save project",Command::Save), TopbarAction::SaveProject),
                 (
                     hint(ui.ctx(),"Save project as…",Command::SaveAs),
@@ -125,6 +142,13 @@ pub fn show_topbar(
         });
         ui.menu_button("Options", |ui| {
             if ui.button("Keyboard shortcuts…").clicked() {action=TopbarAction::Shortcuts;ui.close();}
+            ui.separator();
+            ui.strong("Recent files");
+            let mut maximum=recent_files.maximum();
+            let setting=ui.add(egui::Slider::new(&mut maximum,0..=10).text("Maximum files"));
+            #[cfg(test)] ui.ctx().data_mut(|d|d.insert_temp(egui::Id::new("recent_files_maximum"),setting.rect));
+            if setting.changed() {action=TopbarAction::RecentFilesMaximum(maximum);}
+            ui.small("0 disables and clears the list.");
             ui.separator();
             ui.set_max_width(320.);
             #[cfg(windows)]

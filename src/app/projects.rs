@@ -143,35 +143,40 @@ impl GraphiteApp {
         if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
             tab.title = name.to_owned();
         }
+        self.remember_recent_file(path);
         Ok(())
     }
     pub(super) fn open_project(&mut self) {
+        self.quick_controls.close_size();
         let Some(path) = self.file_dialog()
-            .set_title("Open editable Graphite project")
-            .add_filter("Graphite / Photoshop project", &["graphite", "psd"])
+            .set_title("Open drawing or image")
+            .add_filter("All supported drawings and images", graphite_studio::import::OPEN_EXTENSIONS)
+            .add_filter("Graphite project", &["graphite"])
+            .add_filter("Photoshop document", &["psd"])
+            .add_filter("PNG image", &["png"])
+            .add_filter("JPEG image", &["jpg", "jpeg"])
+            .add_filter("Bitmap image", &["bmp"])
             .pick_file()
         else {
             return;
         };
-        if let Err(e) = self.open_project_path(&path) {
-            self.status = format!("Project not opened: {e}");
-        }
+        self.open_file_with_feedback(&path);
     }
+    pub(super) fn open_recent_project(&mut self,index:usize) {
+        let Some(path)=self.recent_files.files().get(index).cloned() else {return;};
+        self.quick_controls.close_size();
+        self.open_file_with_feedback(&path);
+    }
+    #[cfg(test)]
     pub(super) fn open_project_path(&mut self, path: &Path) -> Result<(), String> {
-        let mut project = graphite_studio::project::load(path)?;
+        let opened = graphite_studio::import::open(path)?;
+        self.install_opened_document(path, opened)
+    }
+    pub(super) fn install_opened_document(&mut self, path: &Path, opened: graphite_studio::import::OpenedDocument) -> Result<(), String> {
+        let mut project = opened.project;
         if project.settings.tool == ToolKind::Brush {
             project.settings.tool = ToolKind::Pencil;
             project.settings.pencil_texture = project.settings.brush_tip.clone();
-        }
-        let pixels = self.document.spec.pixel_count()
-            + self
-                .tabs
-                .iter()
-                .filter_map(|t| t.stored.as_ref())
-                .map(|s| s.document.spec.pixel_count())
-                .sum::<usize>();
-        if pixels + project.document.spec.pixel_count() > 24_000_000 {
-            return Err("Save and close another drawing before opening this project.".into());
         }
         let choice = if project.custom_paper.is_some() {
             PaperTextureChoice::Custom
@@ -199,14 +204,14 @@ impl GraphiteApp {
             custom_paper_texture: project.custom_paper,
             new_document_dpi: dpi,
             psd_bit_depth: self.psd_bit_depth,
-            fit_requested: false,
-            status: format!("Opened editable project {}", path.display()),
+            fit_requested: !opened.editable_source,
+            status: format!("Opened {}: {}", opened.description, path.display()),
         };
         let id = self.next_tab_id;
         self.next_tab_id += 1;
         self.tabs.push(DrawingTab {
-            project_path: Some(path.to_owned()),
-            modified: false,
+            project_path: opened.editable_source.then(||path.to_owned()),
+            modified: !opened.editable_source,
             id,
             title: path
                 .file_stem()
@@ -216,7 +221,8 @@ impl GraphiteApp {
             stored: Some(state),
         });
         self.activate_tab(self.tabs.len() - 1);
-        self.brush_library = project.brushes;
+        if opened.editable_source {self.brush_library = project.brushes;}
+        self.remember_recent_file(path);
         Ok(())
     }
 }
@@ -224,6 +230,69 @@ impl GraphiteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recent_files_track_only_success_and_persist_with_display_preferences() {
+        let root=std::env::temp_dir().join(format!("graphite-recent-app-{}",std::process::id()));std::fs::create_dir_all(&root).unwrap();
+        let mut app=GraphiteApp::with_render_state(None);app.preferences_path=Some(root.join("settings.json"));
+        std::fs::write(root.join("settings.json"),br#"{"acceleration":"IntelHd"}"#).unwrap();
+        app.set_recent_files_maximum(2);
+        let fixtures=Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/open");
+        app.open_project_path(&fixtures.join("rgba.PNG")).unwrap();
+        assert_eq!(crate::performance::Preferences::load_from(&root.join("settings.json")).unwrap().acceleration,crate::performance::AccelerationMode::IntelHd);
+        app.open_project_path(&fixtures.join("color.bmp")).unwrap();
+        app.open_project_path(&fixtures.join("rgba.PNG")).unwrap();
+        assert_eq!(app.recent_files.files().len(),2);assert!(app.recent_files.files()[0].ends_with("rgba.PNG"));
+        let before=app.recent_files.clone();
+        assert!(app.open_project_path(&root.join("missing.png")).is_err());assert_eq!(app.recent_files,before);
+        assert!(app.save_project_path(&root.join("missing-folder/failed.graphite")).is_err());assert_eq!(app.recent_files,before);
+        app.save_image_path(&root.join("copy.png"));assert!(app.recent_files.files()[0].ends_with("copy.png"));
+        app.save_project_path(&root.join("saved.graphite")).unwrap();assert!(app.recent_files.files()[0].ends_with("saved.graphite"));
+        let before=app.tabs.len();app.handle_topbar_action(TopbarAction::OpenRecent(1));app.wait_for_opening();assert_eq!(app.tabs.len(),before+1);assert!(app.recent_files.files()[0].ends_with("copy.png"));
+        app.set_acceleration(crate::performance::AccelerationMode::IntelHd);
+        let saved=crate::performance::Preferences::load_from(app.preferences_path.as_deref().unwrap()).unwrap();assert_eq!(saved.recent_files,app.recent_files);assert_eq!(saved.acceleration,app.acceleration);
+        app.set_recent_files_maximum(0);app.open_project_path(&fixtures.join("color.bmp")).unwrap();
+        let saved=crate::performance::Preferences::load_from(app.preferences_path.as_deref().unwrap()).unwrap();assert_eq!(saved.recent_files.maximum(),0);assert!(saved.recent_files.files().is_empty());
+        app.set_recent_files_maximum(255);assert_eq!(app.recent_files.maximum(),10);assert!(app.recent_files.files().is_empty());
+        for file in ["settings.json","copy.png","saved.graphite"] {std::fs::remove_file(root.join(file)).unwrap();}std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn opening_supported_files_uses_new_tabs_and_keeps_failed_opens_out() {
+        let mut app=GraphiteApp::with_render_state(None);
+        app.replace_document(CanvasSpec::from_physical("Existing drawing",12.,16.,120.));
+        app.tabs[app.active_tab].modified=true;
+        let original=app.document.surface.graphite_mass.clone();
+        let initial_tab=app.active_tab;
+        let fixtures=Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/open");
+        let mut names=vec!["rgba.PNG".to_string(),"palette.png".into(),"gray16.png".into(),"color.bmp".into(),"color.jpeg".into(),"color.jpg".into(),"rotated.jpg".into(),"group-mask.psd".into()];
+        for depth in [8,16,32] {for compression in 0..4 {names.push(format!("layers-{depth}-{compression}.psd"));}}
+        names.push("shape-layers.psd".into());
+        for name in names {
+            let before=app.tabs.len();app.open_project_path(&fixtures.join(&name)).unwrap_or_else(|e|panic!("{name}: {e}"));
+            assert_eq!(app.tabs.len(),before+1);
+            assert!(app.tabs[app.active_tab].modified);
+            assert!(app.tabs[app.active_tab].project_path.is_none(),"imported originals must use Save As");
+            assert!(app.fit_requested);
+        }
+        let tab=app.active_tab;let count=app.tabs.len();
+        assert!(app.open_project_path(&fixtures.join("unsupported-vector-style.psd")).is_err());
+        assert_eq!((app.active_tab,app.tabs.len()),(tab,count));
+        let ctx=egui::Context::default();let mut preview=crate::ui::test_render::Preview::default();
+        for frame in 0..4 {
+            let output=ctx.run_ui(egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(1440.,920.))),..Default::default()},|ui|app.interface(ui));
+            preview.update(&output);
+            if frame==3 {preview.save(&ctx,&output,"../../ui-v248-open-vectors.png",[1440,920]);}
+        }
+        app.document.activate_layer(1);
+        app.select_tool(ToolKind::VectorSelect);app.editing.selected_path=Some(0);
+        let before=app.document.layers[1].vectors.strokes[0].shape.clone();
+        app.begin_transform(&ctx);assert!(app.editing.transform.is_some());
+        app.set_transform_scale_percent(75.);app.apply_transform();
+        assert_ne!(app.document.layers[1].vectors.strokes[0].shape,before);
+        assert!(app.history.undo(&mut app.document));
+        assert_eq!(app.document.layers[1].vectors.strokes[0].shape,before);
+        app.activate_tab(initial_tab);
+        assert_eq!(app.document.surface.graphite_mass,original);assert!(app.tabs[initial_tab].modified);
+    }
     #[test]
     fn unified_save_preserves_editable_projects_and_image_copy_state() {
         let mut app = GraphiteApp::with_render_state(None);

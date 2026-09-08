@@ -104,6 +104,13 @@ pub fn resources(doc: &Document) -> Vec<u8> {
     for layer in &doc.layers {
         let mut combined = blank();
         for (i, stroke) in layer.vectors.strokes.iter().enumerate() {
+            if let Some(shape)=&stroke.shape {
+                let path=native_paths(shape,doc.spec.width_px as f32,doc.spec.height_px as f32);
+                if total<=998 {
+                    resource(&mut out,id,&format!("Layer {} - {} {}",layer.id,i+1,stroke.label),&path);id+=1;
+                } else {combined.extend_from_slice(&path[26..]);}
+                continue;
+            }
             let (mut data, closed) = {
                 let (k, c) = centerline(stroke);
                 (k, c)
@@ -172,6 +179,10 @@ pub fn resource(out: &mut Vec<u8>, id: u16, name: &str, data: &[u8]) {
 // A filled outline of a geometric stroke. Round segment caps/joins are encoded
 // as cubic Bezier circles, combined using Photoshop's vector-mask union operation.
 pub fn shape_mask(s: &VectorStroke, doc: &Document) -> Vec<u8> {
+    if let Some(shape)=&s.shape {
+        let mut out=Vec::new();out.extend(3u32.to_be_bytes());out.extend(u32::from(shape.inverted).to_be_bytes());
+        out.extend(native_paths(shape,doc.spec.width_px as f32,doc.spec.height_px as f32));return out;
+    }
     if !s.polyline {
         return stroke_outline(s, doc);
     }
@@ -244,6 +255,43 @@ pub fn shape_mask(s: &VectorStroke, doc: &Document) -> Vec<u8> {
 fn id(b: &mut Vec<u8>, key: &[u8; 4]) {
     b.extend(0u32.to_be_bytes());
     b.extend(key);
+}
+fn native_paths(shape:&crate::core::vector::shape::Shape,w:f32,h:f32)->Vec<u8>{
+    let mut out=blank();record(&mut out,8,&u16::from(shape.initial_fill).to_be_bytes());
+    for path in &shape.paths {
+        let knots:Vec<_>=path.knots.iter().map(|k|Knot{before:k.before,point:k.anchor,after:k.after}).collect();
+        if knots.is_empty(){continue;}
+        let start=out.len();append(&mut out,&knots,path.closed,w,h);
+        // Each split subpath keeps its boolean operation.
+        let mut at=start;
+        while at<out.len() {
+            let n=u16::from_be_bytes(out[at+2..at+4].try_into().unwrap()) as usize;
+            out[at+4..at+6].copy_from_slice(&path.operation.to_be_bytes());
+            out[at+6..at+8].copy_from_slice(&1u16.to_be_bytes());at+=26*(n+1);
+        }
+    }out
+}
+/// Standard Photoshop stroke descriptor for a retained imported cubic shape.
+pub fn native_style(shape:&crate::core::vector::shape::Shape)->Vec<u8>{
+    fn key(b:&mut Vec<u8>,s:&[u8]) {b.extend((s.len() as u32).to_be_bytes());b.extend(s);}
+    fn boolean(b:&mut Vec<u8>,k:&[u8],v:bool){key(b,k);b.extend(b"bool");b.push(u8::from(v));}
+    fn unit(b:&mut Vec<u8>,k:&[u8],u:&[u8;4],v:f64){key(b,k);b.extend(b"UntF");b.extend(u);b.extend(v.to_be_bytes());}
+    fn enumeration(b:&mut Vec<u8>,k:&[u8],v:&[u8]) {key(b,k);b.extend(b"enum");key(b,k);key(b,v);}
+    let mut b=Vec::new();b.extend(16u32.to_be_bytes());b.extend(0u32.to_be_bytes());key(&mut b,b"strokeStyle");
+    b.extend((if shape.stroke.is_some(){10u32}else{2}).to_be_bytes());
+    boolean(&mut b,b"fillEnabled",shape.fill.is_some());boolean(&mut b,b"strokeEnabled",shape.stroke.is_some());
+    if let Some(s)=&shape.stroke {
+        unit(&mut b,b"strokeStyleLineWidth",b"#Pxl",s.width as f64);
+        let common=shape.fill.map_or(1.,|f|f[3]);
+        unit(&mut b,b"strokeStyleOpacity",b"#Prc",(s.color[3]/common.max(f32::EPSILON)).clamp(0.,1.) as f64*100.);
+        key(&mut b,b"strokeStyleMiterLimit");b.extend(b"doub");b.extend((s.miter as f64).to_be_bytes());
+        enumeration(&mut b,b"strokeStyleLineAlignment",b"strokeStyleAlignCenter");
+        enumeration(&mut b,b"strokeStyleLineCapType",match s.cap {1=>b"strokeStyleRoundCap",2=>b"strokeStyleSquareCap",_=>b"strokeStyleButtCap"});
+        enumeration(&mut b,b"strokeStyleLineJoinType",match s.join {1=>b"strokeStyleRoundJoin",2=>b"strokeStyleBevelJoin",_=>b"strokeStyleMiterJoin"});
+        key(&mut b,b"strokeStyleContent");b.extend(b"Objc");
+        let color=solid_color([s.color[0],s.color[1],s.color[2]].map(|c|(c*255.).round() as u8));b.extend(&color[4..]);
+        enumeration(&mut b,b"strokeStyleBlendMode",b"Nrml");
+    }b
 }
 fn descriptor(b: &mut Vec<u8>, class: &[u8; 4], count: u32) {
     b.extend(0u32.to_be_bytes());

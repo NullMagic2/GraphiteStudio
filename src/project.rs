@@ -10,13 +10,11 @@ use crate::core::{
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
-    io::{self, BufReader, BufWriter, Read, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
     sync::Arc,
 };
 const MAGIC: &[u8; 9] = b"GRAPHITE\x01";
-const MAX_FILE: u64 = 512 * 1024 * 1024;
-const MAX_DECODED: u64 = 2 * 1024 * 1024 * 1024;
 // Buffer the JSON side of compression too: serde emits/reads many tiny tokens.
 const CODEC_BUFFER: usize = 256 * 1024;
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,23 +39,6 @@ pub struct ProjectRef<'a> {
     pub zoom: f32,
     pub pan: [f32; 2],
 }
-struct Limited<W> {
-    inner: W,
-    left: u64,
-}
-impl<W: Write> Write for Limited<W> {
-    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
-        if b.len() as u64 > self.left {
-            return Err(io::Error::other("Project exceeds the supported save size"));
-        }
-        let n = self.inner.write(b)?;
-        self.left -= n as u64;
-        Ok(n)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-}
 /// Complete a sibling temporary file before atomically replacing the requested file.
 pub fn save(path: &Path, project: &ProjectRef<'_>) -> Result<(), String> {
     validate_ref(project)?;
@@ -78,17 +59,11 @@ pub fn save(path: &Path, project: &ProjectRef<'_>) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         file.write_all(MAGIC).map_err(|e| e.to_string())?;
         {
-            let compressed = Limited {
-                inner: BufWriter::new(&mut file),
-                left: MAX_FILE,
-            };
+            let compressed = BufWriter::new(&mut file);
             let encoder = flate2::write::GzEncoder::new(compressed, flate2::Compression::fast());
-            let mut writer = Limited {
-                inner: BufWriter::with_capacity(CODEC_BUFFER, encoder),
-                left: MAX_DECODED,
-            };
+            let mut writer = BufWriter::with_capacity(CODEC_BUFFER, encoder);
             serde_json::to_writer(&mut writer, project).map_err(|e| e.to_string())?;
-            let encoder = writer.inner.into_inner().map_err(|e| e.to_string())?;
+            let encoder = writer.into_inner().map_err(|e| e.to_string())?;
             let mut compressed = encoder.finish().map_err(|e| e.to_string())?;
             compressed.flush().map_err(|e| e.to_string())?;
             drop(compressed);
@@ -111,9 +86,6 @@ pub fn load(path: &Path) -> Result<Project, String> {
         return load_psd(path);
     }
     let file = File::open(path).map_err(|e| e.to_string())?;
-    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE + MAGIC.len() as u64 {
-        return Err("Project file exceeds 512 MB".into());
-    }
     decode(file)
 }
 fn decode(mut file: impl Read) -> Result<Project, String> {
@@ -124,12 +96,9 @@ fn decode(mut file: impl Read) -> Result<Project, String> {
         return Err("Not a supported Graphite project version".into());
     }
     let decoder = flate2::read::GzDecoder::new(BufReader::new(file));
-    let mut reader = BufReader::with_capacity(CODEC_BUFFER, decoder.take(MAX_DECODED + 1));
+    let mut reader = BufReader::with_capacity(CODEC_BUFFER, decoder);
     let mut project: Project = serde_json::from_reader(&mut reader)
         .map_err(|e| format!("Project data is incomplete or invalid: {e}"))?;
-    if reader.get_ref().limit() == 0 {
-        return Err("Project data exceeds the supported size".into());
-    }
     validate(
         &project.document,
         &project.settings,
@@ -231,10 +200,9 @@ fn validate(
     brushes: &[Arc<BrushTip>],
 ) -> Result<(), String> {
     let (w, h) = (doc.spec.width_px, doc.spec.height_px);
-    let n = w.checked_mul(h).ok_or("Invalid paper size")?;
+    let n = crate::limits::canvas_pixels(w, h)?;
     if w == 0
         || h == 0
-        || n > 12_000_000
         || !doc.spec.dpi.is_finite()
         || !(1.0..=2400.0).contains(&doc.spec.dpi)
         || !doc.spec.width_mm.is_finite()
@@ -273,7 +241,6 @@ fn validate(
         return Err("Project material channels do not match the paper".into());
     }
     if doc.layers.is_empty()
-        || doc.layers.len() > 256
         || doc.active_layer >= doc.layers.len()
         || doc.next_layer_id <= doc.layers.iter().map(|l| l.id).max().unwrap_or(0)
         || doc.revision == u64::MAX
@@ -295,7 +262,8 @@ fn validate(
             return Err("Invalid saved layer".into());
         }
         for stroke in &layer.vectors.strokes {
-            if !settings_valid(&stroke.settings)
+            if stroke.shape.as_ref().is_some_and(|s| !s.valid())
+                || !settings_valid(&stroke.settings)
                 || !tip_valid(&stroke.tip)
                 || !selection_valid(&stroke.selection)
                 || stroke.points.len() > 2_000_000
@@ -410,17 +378,13 @@ pub fn save_psd<R: crate::render::DocumentRenderer>(
 ) -> Result<(), String> {
     use std::io::{Seek, SeekFrom};
     validate_ref(project)?;
-    let mut encoder = Limited {
-        inner: BufWriter::with_capacity(CODEC_BUFFER,
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast())),
-        left: MAX_DECODED,
-    };
+    let mut encoder = BufWriter::with_capacity(
+        CODEC_BUFFER,
+        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()),
+    );
     serde_json::to_writer(&mut encoder, project).map_err(|e| e.to_string())?;
-    let encoder = encoder.inner.into_inner().map_err(|e| e.to_string())?;
+    let encoder = encoder.into_inner().map_err(|e| e.to_string())?;
     let compressed = encoder.finish().map_err(|e| e.to_string())?;
-    if compressed.len() as u64 > MAX_FILE {
-        return Err("Project data exceeds 512 MB".into());
-    }
     let mut payload = PSD_MAGIC.to_vec();
     payload.extend(0u64.to_be_bytes());
     payload.extend(MAGIC);
@@ -463,7 +427,7 @@ fn load_psd(path: &Path) -> Result<Project, String> {
     use std::io::{Seek, SeekFrom};
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let location = resource_location(&mut file)?;
-    if location.1 < 25 || location.1 > MAX_FILE + 25 {
+    if location.1 < 25 {
         return Err("Unsupported embedded project size".into());
     }
     let fingerprint = psd_fingerprint(&mut file, location)?;
@@ -534,6 +498,7 @@ mod tests {
                 rotation_deg: Some(62.),
             };
             let stroke = Arc::new(VectorStroke {
+                shape: None,
                 label: "Brush".into(),
                 settings: settings.clone(),
                 tip: tip.clone(),
@@ -592,17 +557,32 @@ mod tests {
         std::env::temp_dir().join(format!("graphite-test-{}-{name}", std::process::id()))
     }
     fn assert_same(a: &Project, b: &Project) {
-        assert_eq!(b.settings.tissue_random_graphite, a.settings.tissue_random_graphite);
+        assert_eq!(
+            b.settings.tissue_random_graphite,
+            a.settings.tissue_random_graphite
+        );
         assert!(b.settings.shape_line_snap);
         assert!(b.settings.transform_keep_aspect);
-        assert!(b.document.layers[0].vectors.strokes[0].settings.shape_line_snap);
-        assert_eq!(b.document.layers[0].vectors.strokes[0].settings.tissue_random_graphite, 0.73);
+        assert!(
+            b.document.layers[0].vectors.strokes[0]
+                .settings
+                .shape_line_snap
+        );
+        assert_eq!(
+            b.document.layers[0].vectors.strokes[0]
+                .settings
+                .tissue_random_graphite,
+            0.73
+        );
         assert_eq!(
             a.document.surface.graphite_mass,
             b.document.surface.graphite_mass
         );
         assert_eq!(a.document.paper_albedo, b.document.paper_albedo);
-        assert_eq!(a.document.paper_texture_opacity,b.document.paper_texture_opacity);
+        assert_eq!(
+            a.document.paper_texture_opacity,
+            b.document.paper_texture_opacity
+        );
         assert_eq!(
             a.document.surface.current_height,
             b.document.surface.current_height
@@ -649,8 +629,11 @@ mod tests {
         let old_reader = flate2::read::GzDecoder::new(&bytes[MAGIC.len()..]);
         let mut decoded: Project = serde_json::from_reader(old_reader).unwrap();
         // The old loader also rebuilt derived selection masks after decoding.
-        decoded.document.selection.set(decoded.document.selection.polygon.clone(),
-            decoded.document.spec.width_px, decoded.document.spec.height_px);
+        decoded.document.selection.set(
+            decoded.document.selection.polygon.clone(),
+            decoded.document.spec.width_px,
+            decoded.document.spec.height_px,
+        );
         assert_same(&p, &decoded);
         std::fs::remove_file(path).unwrap();
     }

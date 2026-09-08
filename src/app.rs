@@ -5,11 +5,14 @@ use eframe::egui::{
 mod editing;
 mod options;
 mod projects;
+mod opening;
 mod quick_line;
 mod quick_controls;
 mod gallery;
 mod paper_settings;
 mod shortcuts_ui;
+#[cfg(test)]
+mod recent_files_tests;
 use graphite_studio::shortcuts::Command;
 
 use crate::{
@@ -102,12 +105,17 @@ pub struct GraphiteApp {
     last_texture_update: Option<std::time::Instant>,
     last_statistics_update: Option<std::time::Instant>,
     preference_status: String,
+    recent_files: graphite_studio::recent_files::RecentFiles,
+    preferences_path: Option<std::path::PathBuf>,
     editing: editing::EditingState,
     quick_controls: quick_controls::QuickControls,
     shortcuts: shortcuts_ui::ShortcutEditor,
     brush_library: Vec<std::sync::Arc<crate::core::brush::BrushTip>>,
     gallery: gallery::GalleryUi,
     paper_settings: paper_settings::PaperSettingsUi,
+    opening: Option<opening::OpeningJob>,
+    open_error: Option<String>,
+    prepared_preview: Option<(u64, egui::ColorImage)>,
     save_as_open: bool,
     save_as_format: projects::SaveAsFormat,
     shape_drag: Option<(StrokePoint, StrokePoint)>,
@@ -280,6 +288,7 @@ impl GraphiteApp {
                     settings.shape_width_px / (2. * contact.cross_radius_px);
                 self.prepare_vector_base();
                 let record = crate::core::vector::VectorStroke {
+                    shape: None,
                     label: self.settings.shape.label().into(),
                     settings: settings.clone(),
                     tip: self.tip_state.clone(),
@@ -323,7 +332,6 @@ impl GraphiteApp {
     /// The active physical surface owns several full-resolution f32 channels before renderer and
     /// history overhead. Inactive drawing layers are sparse-tiled, but the base document still
     /// needs a guard against accidental very-high-DPI allocations.
-    const MAX_DOCUMENT_PIXELS: usize = 12_000_000;
 
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -332,6 +340,10 @@ impl GraphiteApp {
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         cc.egui_ctx.set_zoom_factor(1.0);
         let mut app = Self::with_render_state(cc.wgpu_render_state.clone());
+        app.preferences_path=crate::performance::Preferences::path();
+        if let Some(preferences)=app.preferences_path.as_deref().and_then(crate::performance::Preferences::load_from) {
+            app.recent_files=preferences.recent_files;
+        }
         #[cfg(windows)]
         { app.dialog_parent = cc.winit_window().cloned(); }
         app.acceleration = mode;
@@ -383,12 +395,17 @@ impl GraphiteApp {
             last_texture_update: None,
             last_statistics_update: None,
             preference_status: String::new(),
+            recent_files: Default::default(),
+            preferences_path: None,
             editing: Default::default(),
             quick_controls: Default::default(),
             shortcuts: Default::default(),
             brush_library: Vec::new(),
             gallery: Default::default(),
             paper_settings: Default::default(),
+            opening: None,
+            open_error: None,
+            prepared_preview: None,
             save_as_open: false,
             save_as_format: Default::default(),
             shape_drag: None,
@@ -439,7 +456,7 @@ impl GraphiteApp {
             layers_panel_width: 250.,
             fit_requested: true,
             sidebar_statistics: (0, 0.0, 0.0),
-            status: "Ready. Graphite Studio v0.24.7".to_owned(),
+            status: "Ready. Graphite Studio v0.24.12".to_owned(),
         }
     }
 
@@ -553,29 +570,11 @@ impl GraphiteApp {
     }
 
     fn replace_document(&mut self, spec: CanvasSpec) {
-        if spec.pixel_count() > Self::MAX_DOCUMENT_PIXELS {
-            let megapixels = spec.pixel_count() as f32 / 1_000_000.0;
-            let max_mp = Self::MAX_DOCUMENT_PIXELS as f32 / 1_000_000.0;
-            self.status = format!(
-                "Document not created: {:.1} MP at {:.0} dpi exceeds the {:.0} MP safety limit. Lower the DPI.",
-                megapixels, spec.dpi, max_mp
-            );
+        if let Err(error) = graphite_studio::limits::canvas_pixels(spec.width_px, spec.height_px) {
+            self.status = format!("Document not created: {error}");
             return;
         }
-
         let (paper_texture_label, paper_albedo) = self.resolve_paper_texture(&spec);
-        let open_pixels: usize = self.document.spec.pixel_count()
-            + self
-                .tabs
-                .iter()
-                .filter_map(|t| t.stored.as_ref())
-                .map(|t| t.document.spec.pixel_count())
-                .sum::<usize>();
-        if open_pixels + spec.pixel_count() > 24_000_000 {
-            self.status =
-                "Close an exported drawing or use a lower DPI before opening another tab.".into();
-            return;
-        }
         let state = DrawingState {
             document: Document::new(
                 spec,
@@ -647,6 +646,7 @@ impl GraphiteApp {
         self.active_tab = index;
         self.pressure_input = PressureInputState::default();
         self.renderer.reset();
+        self.prepared_preview = None;
         self.display_pyramid = None;
         self.fallback_texture = None;
         self.sidebar_statistics = (0, 0.0, 0.0);
@@ -748,7 +748,10 @@ impl GraphiteApp {
 
     fn ensure_texture(&mut self, ctx: &egui::Context) {
         if self.display_pyramid.is_none() && self.fallback_texture.is_none() {
-            let image = self.renderer.render_full(&self.document);
+            let image = self.prepared_preview.take()
+                .filter(|(revision, _)| *revision == self.document.revision())
+                .map(|(_, image)| image)
+                .unwrap_or_else(|| self.renderer.render_full(&self.document));
 
             let mut gpu_error = None;
             if let Some(render_state) = self
@@ -873,6 +876,7 @@ impl GraphiteApp {
     }
 
     fn handle_topbar_action(&mut self, action: TopbarAction) {
+        if let TopbarAction::RecentFilesMaximum(maximum)=action {self.set_recent_files_maximum(maximum);return;}
         if action == TopbarAction::Shortcuts {self.open_shortcuts();return;}
         if action == TopbarAction::PencilGallery {self.open_pencil_gallery();return;}
         if action == TopbarAction::PaperSettings {
@@ -979,6 +983,8 @@ impl GraphiteApp {
             TopbarAction::Fit => self.fit_requested = true,
 
             TopbarAction::OpenProject => self.open_project(),
+            TopbarAction::OpenRecent(index) => self.open_recent_project(index),
+            TopbarAction::RecentFilesMaximum(_) => unreachable!(),
             TopbarAction::SaveProject => self.save_project(false),
             TopbarAction::SaveProjectAs => self.save_project(true),
             TopbarAction::ApplyPaperTexture => self.apply_selected_paper_texture(),
@@ -1201,6 +1207,7 @@ impl GraphiteApp {
             psd_bit_depth: self.psd_bit_depth,
         };
         let saved = save_rendered_document(&mut self.renderer, &self.document, &path, options);
+        if saved.is_ok() {self.remember_recent_file(path);}
         if saved.is_ok() && self.tabs[self.active_tab].project_path.is_none() {
             if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
                 self.tabs[self.active_tab].title = name.to_owned();
@@ -1253,7 +1260,7 @@ impl GraphiteApp {
         area.show_viewport(ui, |ui, scroll_viewport| {
             let view_rect = ui.clip_rect();
             let view_size = scroll_viewport.size();
-            if !self.shortcuts.open && !self.gallery.open && !self.paper_settings.open && !self.save_as_open
+            if self.opening.is_none() && self.open_error.is_none() && !self.shortcuts.open && !self.gallery.open && !self.paper_settings.open && !self.save_as_open
                 && !ui.ctx().text_edit_focused() {
                 let steps=ui.input_mut(|input| {
                     let mut steps=0i32;
@@ -1283,7 +1290,7 @@ impl GraphiteApp {
             );
             // Consume native packets, but keep gallery/settings gestures off the drawing.
             input.space_down=!ui.ctx().text_edit_focused() && ui.input(|i|self.shortcuts.bindings.down(i,Command::Pan));
-            let input = if self.shortcuts.open || self.gallery.open || self.paper_settings.open || self.save_as_open { PointerFrame::default() } else { input };
+            let input = if self.opening.is_some() || self.open_error.is_some() || self.shortcuts.open || self.gallery.open || self.paper_settings.open || self.save_as_open { PointerFrame::default() } else { input };
 
             if !input.touch_navigation {
                 self.touch_rotation = None;
@@ -1670,6 +1677,7 @@ impl GraphiteApp {
 
         if !session.transaction.is_empty() {
             let record = crate::core::vector::VectorStroke {
+                shape: None,
                 label: if session.quick_line.snapped() { "Straight pencil line".into() } else { session.settings.tool.label().into() },
                 settings: session.settings,
                 tip: session.initial_tip,
@@ -1908,8 +1916,14 @@ impl GraphiteApp {
         ui.ctx().options_mut(|o| o.zoom_with_keyboard = false);
         self.tick_pencil_preferences(ui.ctx());
         self.apply_display_style(ui.ctx());
-        self.prepare_quick_controls(ui);
-        self.handle_keyboard_shortcuts(ui);
+        self.poll_opening();
+        self.show_opening(ui.ctx());
+        if self.opening.is_some() || self.open_error.is_some() {
+            ui.disable();
+        } else {
+            self.prepare_quick_controls(ui);
+            self.handle_keyboard_shortcuts(ui);
+        }
         if self.fullscreen_applied != self.fullscreen {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
@@ -1961,8 +1975,10 @@ impl GraphiteApp {
                 &self.renderer_label,
                 self.settings.use_wintab,
                 self.document.spec.width_px > self.document.spec.height_px,
+                &self.recent_files,
             );
             self.handle_topbar_action(action);
+            if self.opening.is_some() { ui.ctx().request_repaint(); }
             if self.fullscreen { ui.ctx().request_repaint(); }
             if self.rotate_view {
                 ui.horizontal(|ui| {

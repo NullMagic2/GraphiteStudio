@@ -278,7 +278,7 @@ fn write_psd_header_with_resources<W: Write>(
     be_u32(
         writer,
         28u32
-            .checked_add(resources.len() as u32)
+            .checked_add(u32::try_from(resources.len()).map_err(|_| invalid_input("PSD resources exceed the format's 4 GB field"))?)
             .ok_or_else(|| invalid_input("PSD resources exceed 4 GB"))?,
     )?;
     writer.write_all(b"8BIM")?;

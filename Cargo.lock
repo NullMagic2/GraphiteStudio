@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "graphite-studio"
-version = "0.24.7"
+version = "0.24.12"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -1412,6 +1412,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "tiny-skia",
  "windows-sys 0.61.2",
  "winit",
  "winresource",

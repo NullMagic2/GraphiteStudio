@@ -110,6 +110,7 @@ impl QuarterTurn {
                     let new=Arc::new(new);self.strokes.insert(key,new.clone());return new;
                 }
                 let angle = if self.clockwise { 90. } else { -90. };
+                if let Some(shape)=&mut new.shape {shape.map(|p|self.point(p),1.);}
                 for p in &mut new.points {
                     let v = self.point(Vec2::new(p.x, p.y));
                     p.x = v.x;

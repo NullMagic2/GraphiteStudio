@@ -136,7 +136,8 @@ fn write_info<W: Write + Seek>(
     depth: u16,
 ) -> io::Result<()> {
     let start = w.stream_position()?;
-    be_u16(w, layers.len() as u16)?;
+    let count = i16::try_from(layers.len()).map_err(|_| invalid_input("PSD version 1 cannot represent more than 32767 layer records. Save as a Graphite project."))?;
+    be_u16(w, count as u16)?;
     for layer in layers {
         let r = layer.bounds;
         for v in [r.min_y, r.min_x, r.max_y, r.max_x] {
@@ -187,11 +188,10 @@ fn write_info<W: Write + Seek>(
         be_u32(w, 4)?;
         be_u32(w, layer.id)?;
         if let Some(shape) = layer.shape {
-            super::psd_vectors::tagged(
-                w,
-                b"SoCo",
-                &super::psd_vectors::solid_color(shape.settings.pencil_color_rgb),
-            )?;
+            if let Some(native)=&shape.shape {
+                if let Some(fill)=native.fill {super::psd_vectors::tagged(w,b"SoCo",&super::psd_vectors::solid_color([fill[0],fill[1],fill[2]].map(|v|(v*255.).round() as u8)))?;}
+                super::psd_vectors::tagged(w,b"vstk",&super::psd_vectors::native_style(native))?;
+            } else {super::psd_vectors::tagged(w,b"SoCo",&super::psd_vectors::solid_color(shape.settings.pencil_color_rgb))?;}
             super::psd_vectors::tagged(w, b"vmsk", &super::psd_vectors::shape_mask(shape, doc))?;
         }
         finish_length(w, extra)?;
@@ -239,9 +239,18 @@ pub(super) fn write_layered_psd<W: Write + Seek, R: DocumentRenderer>(
             "PSD supports at most 32766 drawing layers plus paper",
         ));
     }
+    if doc.spec.width_px > 30_000 || doc.spec.height_px > 30_000 {
+        return Err(invalid_input("PSD version 1 cannot represent dimensions above 30000 pixels. Save as a Graphite project."));
+    }
     let bits = depth.bits();
     let mut resources = super::psd_vectors::resources(doc);
     if let Some(project) = project {
+        let name_size = (1 + "GraphiteStudio.Project.v1".len()).next_multiple_of(2);
+        let overhead = 28 + 4 + 2 + name_size + 4 + project.len() % 2;
+        if resources.len().checked_add(project.len()).and_then(|n| n.checked_add(overhead))
+            .is_none_or(|n| n > u32::MAX as usize) {
+            return Err(invalid_input("PSD image resources cannot exceed the format's 4 GB field. Save as a Graphite project."));
+        }
         super::psd_vectors::resource(&mut resources, 4000, "GraphiteStudio.Project.v1", project);
     }
     write_psd_header_with_resources(
@@ -295,7 +304,7 @@ pub(super) fn write_layered_psd<W: Write + Seek, R: DocumentRenderer>(
                 return Err(invalid_input("Too many native shape layers for PSD"));
             }
             layers.push(Layer {
-                opacity: (layer.opacity as f32 * shape.opacity()).round() as u8,
+                opacity: (layer.opacity as f32 * shape.opacity() * shape.shape.as_ref().and_then(|s|s.fill).map_or(1.,|f|f[3])).round() as u8,
                 index: None,
                 bounds: DirtyRect::new(0, 0, 0, 0),
                 name: format!("Vector - {} - {} {}", layer.name, i + 1, shape.label).into(),

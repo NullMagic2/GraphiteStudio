@@ -23,6 +23,7 @@ fn orientation_is_lossless_across_layers_paths_selection_and_undo_redo() {
     );
     let mut history = History::default();
     let mut stroke = VectorStroke {
+        shape: None,
         label: "Test".into(),
         settings: ToolSettings {
             tool: ToolKind::Brush,

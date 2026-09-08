@@ -8,9 +8,12 @@ use super::{
 };
 use eframe::egui::{Rect, Vec2};
 use std::sync::Arc;
+pub mod shape;
 /// Editable path commands remain separate from their material rasterization.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct VectorStroke {
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub shape: Option<shape::Shape>,
     pub label: String,
     pub settings: ToolSettings,
     pub tip: PencilTipState,
@@ -37,6 +40,7 @@ impl VectorLayer {
 impl VectorStroke {
     /// Hit the retained path, including its smoothed curve, rather than individual grain pixels.
     pub fn hit_test(&self, point: Vec2, tolerance: f32, dpi: f32) -> bool {
+        if let Some(shape)=&self.shape {return shape.hit_test(point,tolerance);}
         if self.points.is_empty() || self.opacity() <= 0. {
             return false;
         }
@@ -100,6 +104,7 @@ impl VectorStroke {
         curve(cursor, raw, raw)
     }
     pub fn bounds(&self, dpi: f32) -> Rect {
+        if let Some(shape)=&self.shape {return shape.bounds();}
         let mut bounds = Rect::NOTHING;
         for p in &self.points {
             bounds.extend_with(eframe::egui::Pos2::new(p.x, p.y));
@@ -119,6 +124,7 @@ impl VectorStroke {
     pub fn rotated(&self, center: eframe::egui::Pos2, angle: f32) -> Self {
         let mut out = self.clone();
         let degrees = angle.to_degrees();
+        if let Some(shape)=&mut out.shape {shape.map(|p|rotate(p.to_pos2(),center,angle).to_vec2(),1.);}
         for point in &mut out.points {
             let p = rotate(eframe::egui::Pos2::new(point.x, point.y), center, angle);
             point.x = p.x;
@@ -135,6 +141,7 @@ impl VectorStroke {
         let mut out=self.clone();
         let point=|p:Vec2|if horizontal {Vec2::new(2.*center.x-p.x,p.y)}else{Vec2::new(p.x,2.*center.y-p.y)};
         let angle=|a:f32|((if horizontal {180.}else{0.})-a).rem_euclid(360.);
+        if let Some(shape)=&mut out.shape {shape.map(point,1.);}
         for p in &mut out.points {
             let v=point(Vec2::new(p.x,p.y));p.x=v.x;p.y=v.y;
             p.azimuth_deg=angle(p.azimuth_deg);p.rotation_deg=p.rotation_deg.map(|r|(-r).rem_euclid(360.));
@@ -166,6 +173,7 @@ impl VectorStroke {
         let mut out = self.clone();
         let scale = to.size() / from.size();
         let width = (scale.x * scale.y).sqrt();
+        if let Some(shape)=&mut out.shape {shape.map(|p|to.min.to_vec2()+(p-from.min.to_vec2())*scale,width);}
         for p in &mut out.points {
             let v = to.min.to_vec2() + (Vec2::new(p.x, p.y) - from.min.to_vec2()) * scale;
             p.x = v.x;
@@ -202,6 +210,7 @@ impl VectorStroke {
     }
 
     pub fn opacity(&self) -> f32 {
+        if self.shape.is_some() {return 1.;}
         if self.polyline && self.settings.tool == ToolKind::Pencil {
             self.settings.shape_opacity.clamp(0., 1.)
         } else {
@@ -210,6 +219,7 @@ impl VectorStroke {
     }
 
     fn apply_full(&self, doc: &mut Document, tx: &mut EditTransaction) {
+        if let Some(shape)=&self.shape {shape.apply(doc,tx);return;}
         let Some(&first) = self.points.first() else {
             return;
         };
@@ -289,6 +299,7 @@ mod tests {
             rotation_deg: Some(80.),
         };
         let original = VectorStroke {
+            shape: None,
             label: "Pencil".into(),
             tip: PencilTipState::default(),
             engine: StrokeEngine::default(),

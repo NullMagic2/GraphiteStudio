@@ -1,4 +1,4 @@
-//! Application preferences affect presentation only, never saved drawing material.
+//! Portable display preferences and optional recent-file history, separate from drawing material.
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 
@@ -57,9 +57,11 @@ impl AccelerationMode {
 #[derive(Default, Serialize, Deserialize)]
 pub struct Preferences {
     pub acceleration: AccelerationMode,
+    #[serde(default)]
+    pub recent_files: crate::recent_files::RecentFiles,
 }
 impl Preferences {
-    // Portable builds keep preferences beside the executable. No drawing paths are stored here.
+    // Portable builds keep display settings and the optional recent-file list beside the executable.
     pub fn path() -> Option<PathBuf> {
         Some(
             std::env::current_exe()
@@ -69,10 +71,11 @@ impl Preferences {
         )
     }
     pub fn load_from(path: &std::path::Path) -> Option<Self> {
-        if std::fs::metadata(path).ok()?.len() > 4096 {
+        if std::fs::metadata(path).ok()?.len() > 2 * 1024 * 1024 {
             return None;
         }
-        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+        let mut preferences:Self=serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        preferences.recent_files.normalize();Some(preferences)
     }
     pub fn save_to(&self, path: &std::path::Path) -> Result<(), String> {
         use std::io::Write;
@@ -187,7 +190,7 @@ mod tests {
             std::process::id()
         ));
         for acceleration in AccelerationMode::ALL {
-            Preferences { acceleration }.save_to(&path).unwrap();
+            Preferences { acceleration, ..Default::default() }.save_to(&path).unwrap();
             assert_eq!(
                 Preferences::load_from(&path).unwrap().acceleration,
                 acceleration
@@ -195,6 +198,18 @@ mod tests {
         }
         std::fs::write(&path, b"{bad}").unwrap();
         assert!(Preferences::load_from(&path).is_none());
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn recent_preferences_preserve_legacy_display_settings_and_disabled_state() {
+        let path=std::env::temp_dir().join(format!("graphite-recent-preferences-{}.json",std::process::id()));
+        std::fs::write(&path,br#"{"acceleration":"IntelHd"}"#).unwrap();
+        let mut p=Preferences::load_from(&path).unwrap();
+        assert_eq!(p.acceleration,AccelerationMode::IntelHd);assert_eq!(p.recent_files.maximum(),10);
+        p.recent_files.remember(&std::env::temp_dir().join("Café drawing.psd"));p.save_to(&path).unwrap();
+        let mut p=Preferences::load_from(&path).unwrap();assert_eq!(p.recent_files.files().len(),1);
+        p.recent_files.set_maximum(0);p.save_to(&path).unwrap();
+        let p=Preferences::load_from(&path).unwrap();assert_eq!(p.recent_files.maximum(),0);assert!(p.recent_files.files().is_empty());assert_eq!(p.acceleration,AccelerationMode::IntelHd);
         std::fs::remove_file(path).unwrap();
     }
 }

@@ -17,6 +17,7 @@ fn main() {
         if layer > 0 { doc.add_layer(); }
         for line in 0..10 {
             let stroke = Arc::new(VectorStroke {
+                shape: None,
                 label: "Pencil".into(), settings: settings.clone(), tip: tip.clone(), engine: engine.clone(),
                 points: (0..50).map(|i| StrokePoint { x: 100. + i as f32 * 10.,
                     y: 180. + (layer * 350 + line * 20) as f32 + (i as f32 * 0.15).sin() * 30.,

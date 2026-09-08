@@ -5,6 +5,11 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.24.12](#v02412)
+- [v0.24.11](#v02411)
+- [v0.24.10](#v02410)
+- [v0.24.9](#v0249)
+- [v0.24.8](#v0248)
 - [v0.24.7](#v0247)
 - [v0.24.6](#v0246)
 - [v0.24.5](#v0245)
@@ -74,6 +79,41 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.24.12
+
+- Remove the 16-million-pixel canvas quota, 512 MB source/native file quota, and 256-layer quota across opening, creation, save, and native reopening. Remove the associated 32-million-pixel open-tab quota, 768 PSD-record quota, 256 MB decoder quota, and 2 GB native decompression/serialization quota.
+- Keep nonzero/overflow validation and file-format field validation. Large Graphite projects are no longer restricted to PSD's representable sizes; PSD export reports its actual format constraints before narrowing integers.
+- Verify files larger than 512 MB, 800-layer Graphite/native PSD/external PSD roundtrips, and a 4001 x 4000 canvas through PNG opening and native save/reopen. Preserve background opening, progress display, and Recent files.
+
+## v0.24.11
+
+- Remove the combined-layer pixel cap from PSD records, vector/path import, and drawing conversion. Layer bounds retain arithmetic/overflow validation without a pixel quota.
+- Store exactly representable 8-bit import samples in compact temporary buffers, reducing their retained memory by 75%; higher-depth samples and fractional masks retain full precision. No resizing, flattening, hidden-layer removal, or sample quantization is used.
+- Verify the reported 3015 x 2743, eight-layer PSD through background opening against an independent decoder: all 66,161,160 layer pixels, names, order, opacity, visibility, and blend modes. Private artwork is not included in the package.
+
+## v0.24.10
+
+- Add File > Recent files for successful opens and saves, with newest files first, duplicate removal and full-path tooltips.
+- Add Options > Recent files > Maximum files, from 0 to 10 (default 10). Lowering it trims the list immediately; 0 disables and clears history and stops recording paths.
+- Persist the limit and list alongside display preferences, preserving existing acceleration settings and older preference files.
+- Verify menu opening, the Options slider, disk persistence, case-insensitive Windows paths, save/export recording, failed operations and disabling/re-enabling.
+
+## v0.24.9
+
+- Fix opening ordinary 4032 × 3024 camera-sized PSDs (12,192,768 pixels), previously rejected by the decimal 12-million-pixel limit.
+- Share a 16-million-pixel canvas limit across image import, document creation and native project reopening. Open tabs and imported layer data allow 32 million pixels in total.
+- Keep the original dimensions and layer structure; no resizing or flattening is used to fit the new limit.
+- Add boundary checks and an opt-in full-size PSD regression that compares every rendered pixel against an independent RGB reference and verifies native/PSD save-reopen behavior. Private artwork is not bundled.
+
+## v0.24.8
+
+- Open now accepts Graphite, external PSD, PNG, JPEG and BMP files. External images open in new tabs with fit-to-screen and use Save As to protect the original.
+- PSD import preserves image layers, supported blending, visibility, opacity, names and offsets; raw/RLE/ZIP/prediction work at 8/16/32-bit depth. Pass-through folder children stay separate, with bitmap masks/clipping applied per layer.
+- Photoshop solid-color Bézier shape layers and centered solid outlines remain editable vectors, including handles, holes and path operations. Saved paths open as hidden vector layers. Transform, mirror, rotate, undo and save/reopen retain their geometry.
+- Unsupported Photoshop-only features report an explanation; opening a layered PSD never falls back to its flattened preview.
+- Added independent PSD-library fixtures covering the depth/compression matrix, grouped masks, curves, fills, holes, outlines, saved paths and unsupported styles, plus PNG/JPEG/BMP variants and application import/undo tests.
+- Retains the persistent Shift size slider from v0.24.7.
 
 ## v0.24.7
 

@@ -176,8 +176,8 @@ impl GraphiteApp {
                 }
                 let spec=self.configured_paper_spec(self.canvas_preset,self.new_document_dpi);
                 ui.label(format!("{:.2} × {:.2} mm · {} × {} px",spec.width_mm,spec.height_mm,spec.width_px,spec.height_px));
-                let valid=spec.pixel_count()<=Self::MAX_DOCUMENT_PIXELS;
-                if !valid{ui.label("Reduce the dimensions or DPI to stay within the document size limit.");}
+                let valid=graphite_studio::limits::canvas_pixels(spec.width_px,spec.height_px).is_ok();
+                if !valid{ui.label("Dimensions must be nonzero and representable in memory.");}
                 let response=ui.add_enabled(valid,egui::Button::new("Create drawing"));
                 #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("paper_create"),response.rect));
                 create=response.clicked();

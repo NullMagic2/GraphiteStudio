@@ -37,6 +37,14 @@ pub struct PixelDepositState {
 }
 
 impl PixelDepositState {
+/// Inverse of the material renderer's straight RGBA coverage.
+pub(crate) fn from_rgba(pixel:[f32;4])->PixelDepositState {
+    let alpha=pixel[3].clamp(0.,1.-f32::EPSILON);
+    let mass=-(-alpha).ln_1p()/(4.85*0.86);
+    PixelDepositState{graphite_mass:mass,loose_mass:mass,color_r_mass:pixel[0].clamp(0.,1.)*mass,
+        color_g_mass:pixel[1].clamp(0.,1.)*mass,color_b_mass:pixel[2].clamp(0.,1.)*mass,..Default::default()}
+}
+
     pub fn optical_depth(self) -> f32 {
         let mechanical = self.loose_mass + self.compacted_mass;
         let packed = if mechanical <= 1e-8 {

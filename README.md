@@ -16,6 +16,9 @@ Graphite Studio models how a pencil contacts paper, deposits pigment, wears down
 - **Pen and touch:** selectable Windows Ink and Wintab input, pressure calibration, and canvas pinch, pan and rotation when the device or bridge forwards those gestures.
 - **GPU acceleration:** Vulkan or DirectX 12 compute for eligible pencil and eraser strokes, with bounded buffers and CPU fallback. The display preserves texture with antialiasing and linear-light downsampling.
 
+- <img width="3826" height="2054" alt="image" src="https://github.com/user-attachments/assets/db612692-42a9-4dff-9061-12aca21becbd" />
+
+
 ## Run on Windows
 
 Extract a packaged build and run **Graphite Studio.exe** from a writable folder. It is a portable application with embedded icons and no console window.

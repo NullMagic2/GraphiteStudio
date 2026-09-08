@@ -116,6 +116,8 @@ pub struct GraphiteApp {
     material_panel_width: f32,
     #[cfg(windows)]
     window_recovery: crate::window_recovery::WindowRecovery,
+    #[cfg(windows)]
+    dialog_parent: Option<std::sync::Arc<winit::window::Window>>,
     document: Document,
     renderer: RasterRenderer,
     wgpu_render_state: Option<egui_wgpu::RenderState>,
@@ -141,6 +143,17 @@ pub struct GraphiteApp {
 }
 
 impl GraphiteApp {
+    /// The native owner determines modal stacking and the current monitor.
+    /// Keep the actual window alive, rather than caching a screen or raw HWND.
+    fn file_dialog(&self) -> rfd::FileDialog {
+        let dialog = rfd::FileDialog::new();
+        #[cfg(windows)]
+        if let Some(parent) = &self.dialog_parent {
+            return dialog.set_parent(parent.as_ref());
+        }
+        dialog // Headless tests and non-Windows builds have no Windows owner.
+    }
+
     fn prepare_vector_base(&mut self) {
         let active = self.document.active_layer_index();
         if self.document.layers[active].vectors.strokes.is_empty()
@@ -155,7 +168,7 @@ impl GraphiteApp {
     fn import_brushes(&mut self) {
         self.finish_stroke();
         self.apply_transform();
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = self.file_dialog()
             .add_filter("Photoshop sampled brushes", &["abr"])
             .pick_file()
         else {
@@ -312,6 +325,8 @@ impl GraphiteApp {
         mode: crate::performance::AccelerationMode,
     ) -> Self {
         let mut app = Self::with_render_state(cc.wgpu_render_state.clone());
+        #[cfg(windows)]
+        { app.dialog_parent = cc.winit_window().cloned(); }
         app.acceleration = mode;
         app.startup_acceleration = mode;
         app.gallery.load();
@@ -392,6 +407,8 @@ impl GraphiteApp {
             material_panel_width: 282.0,
             #[cfg(windows)]
             window_recovery: Default::default(),
+            #[cfg(windows)]
+            dialog_parent: None,
             document,
             renderer: RasterRenderer::default(),
             wgpu_render_state: render_state,
@@ -413,7 +430,7 @@ impl GraphiteApp {
             layers_panel_width: 250.,
             fit_requested: true,
             sidebar_statistics: (0, 0.0, 0.0),
-            status: "Ready. Graphite Studio v0.23.6".to_owned(),
+            status: "Ready. Graphite Studio v0.23.7".to_owned(),
         }
     }
 
@@ -494,7 +511,7 @@ impl GraphiteApp {
             "Ivory" => PaperTextureChoice::Ivory,
             _ => PaperTextureChoice::White,
         };
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = self.file_dialog()
             .set_title("Load custom paper texture")
             .add_filter("Image", &["png", "jpg", "jpeg", "bmp"])
             .pick_file()
@@ -1053,6 +1070,7 @@ impl GraphiteApp {
         if self.fullscreen
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
+            self.cancel_transform_and_deselect();
             self.fullscreen = false;
             self.fullscreen_size = None;
             self.rotate_view = false;
@@ -1084,7 +1102,7 @@ impl GraphiteApp {
             }
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::R)) {
                 self.finish_stroke();
-                self.apply_transform();
+                self.cancel_transform_for_tool_change();
                 self.shape_drag = None;
                 self.editing.lasso = None;
                 self.rotate_view = !self.rotate_view;
@@ -1786,6 +1804,9 @@ impl eframe::App for GraphiteApp {
                 self.window_recovery.request_recovery();
             }
             if let Some(window) = frame.winit_window() {
+                if self.dialog_parent.as_ref().is_none_or(|parent| !std::sync::Arc::ptr_eq(parent, window)) {
+                    self.dialog_parent = Some(window.clone());
+                }
                 let polling =
                     self.wintab
                         .update(window, self.settings.use_wintab, ctx.input(|i| i.focused));

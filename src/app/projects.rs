@@ -78,7 +78,7 @@ impl GraphiteApp {
         }
         if choose {
             let format = self.save_as_format;
-            if let Some(mut path) = rfd::FileDialog::new()
+            if let Some(mut path) = self.file_dialog()
                 .set_title("Save project as…")
                 .add_filter(format.label(), &[format.extension()])
                 .set_file_name(format!(
@@ -146,7 +146,7 @@ impl GraphiteApp {
         Ok(())
     }
     pub(super) fn open_project(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = self.file_dialog()
             .set_title("Open editable Graphite project")
             .add_filter("Graphite / Photoshop project", &["graphite", "psd"])
             .pick_file()

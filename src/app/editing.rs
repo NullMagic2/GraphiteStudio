@@ -35,7 +35,7 @@ fn corners(r: Rect) -> [Pos2; 4] {
 impl GraphiteApp {
     pub(super) fn select_tool(&mut self, tool: ToolKind) {
         self.finish_stroke();
-        self.apply_transform();
+        self.cancel_transform_for_tool_change();
         self.shape_drag = None;
         self.editing.lasso = None;
         self.editing.vector_pick = None;
@@ -43,6 +43,20 @@ impl GraphiteApp {
         self.settings.tool = if tool == ToolKind::Brush { ToolKind::Pencil } else { tool };
         self.rotate_view = false;
         self.view_rotation_drag = false;
+    }
+
+    pub(super) fn cancel_transform_for_tool_change(&mut self) {
+        if self.editing.transform.is_some() {
+            self.cancel_transform_and_deselect();
+        }
+    }
+
+    pub(super) fn cancel_transform_and_deselect(&mut self) {
+        self.cancel_transform();
+        self.document.selection = Default::default();
+        self.editing.selected_path = None;
+        self.editing.vector_pick = None;
+        self.editing.lasso = None;
     }
 
     pub(super) fn show_transform_actions(&mut self, ui: &mut egui::Ui) {
@@ -53,7 +67,7 @@ impl GraphiteApp {
                 self.apply_transform();
             }
             if crate::ui::tool_icons::transform_action_button(ui, false).clicked() {
-                self.cancel_transform();
+                self.cancel_transform_and_deselect();
             }
         });
         ui.separator();
@@ -266,7 +280,7 @@ impl GraphiteApp {
             target,
             drag: None,
         });
-        self.status=if vector_mode{"Transform: Confirm or switch tools to keep the result. Cancel restores the original. Enter / Esc also work."}else{"Pixel selection transform: confirming flattens this layer’s editable paths. Cancel restores the original. Switching tools confirms."}.into();
+        self.status=if vector_mode{"Transform: Confirm or Enter keeps the result. Cancel, Esc or switching tools restores the original."}else{"Pixel selection transform: confirming flattens this layer’s editable paths. Cancel, Esc or switching tools restores the original."}.into();
     }
     pub(super) fn begin_rotation(&mut self, ctx: &egui::Context) {
         self.begin_transform(ctx);
@@ -608,8 +622,7 @@ impl GraphiteApp {
                 );
             }
             4 => {
-                self.cancel_transform();
-                self.editing.lasso = None;
+                self.cancel_transform_and_deselect();
                 self.shape_drag = None;
             }
             5 => self.apply_transform(),
@@ -692,34 +705,39 @@ mod tests {
     }
 
     #[test]
-    fn selecting_toolbar_tools_keeps_translated_resized_rotated_vector_and_undo() {
-        for tool in ToolKind::PALETTE {
+    fn selecting_toolbar_tools_cancels_vector_and_pixel_transforms_and_deselects() {
+        for pixels in [false, true] { for tool in ToolKind::PALETTE {
             let mut a = app();
             let ctx = egui::Context::default();
             draw(&mut a, &ctx, Pos2::new(35., 55.), Pos2::new(90., 65.));
-            let before = a.document.surface.graphite_mass.clone();
+            let before = a.renderer.rgba8(&a.document);
             let original = a.document.layers[0].vectors.clone();
             a.editing.selected_path = Some(0);
+            if pixels {
+                a.document.selection.set(vec![Vec2::new(20., 30.), Vec2::new(115., 30.),
+                    Vec2::new(115., 90.), Vec2::new(20., 90.)], a.document.spec.width_px, a.document.spec.height_px);
+            }
             let _ = ctx.run_ui(Default::default(), |ui| a.begin_transform(ui.ctx()));
             let t = a.editing.transform.as_mut().unwrap();
             t.target = Rect::from_min_size(t.target.min + Vec2::new(45., 65.), t.target.size() * 1.2);
             t.angle = 0.45;
-            let expected = original.strokes[0].transformed(t.cutout.bounds, t.target).rotated(t.target.center(), t.angle);
             for _ in 0..3 { interface_frame(&mut a, &ctx, vec![]); }
             let pos = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("test_tool_icon", tool.label()))).unwrap().center());
             click_interface(&mut a, &ctx, pos);
             assert_eq!(a.settings.tool, tool);
             assert!(a.editing.transform.is_none());
-            assert_eq!(serde_json::to_vec(&expected).unwrap(), serde_json::to_vec(&a.document.layers[0].vectors.strokes[0]).unwrap());
-            assert_ne!(before, a.document.surface.graphite_mass);
-            assert!(a.history.undo(&mut a.document));
-            assert_eq!(before, a.document.surface.graphite_mass);
+            assert!(a.editing.selected_path.is_none());
+            assert!(a.document.selection.polygon.is_empty());
+            assert_eq!(before, a.renderer.rgba8(&a.document));
             assert!(Arc::ptr_eq(&original, &a.document.layers[0].vectors));
-        }
+            // Cancelling creates no undo entry: one undo still removes the drawing stroke.
+            assert!(a.history.undo(&mut a.document));
+            assert!(a.document.surface.graphite_mass.iter().all(|&m| m == 0.));
+        }}
     }
 
     #[test]
-    fn tool_shortcuts_commit_pending_transform() {
+    fn tool_shortcuts_cancel_pending_transform() {
         for key in [egui::Key::P, egui::Key::B, egui::Key::E, egui::Key::V, egui::Key::R] {
             let mut a = app();
             let ctx = egui::Context::default();
@@ -731,8 +749,28 @@ mod tests {
             interface_frame(&mut a, &ctx, vec![egui::Event::Key { key, physical_key: None,
                 pressed: true, repeat: false, modifiers: Default::default() }]);
             assert!(a.editing.transform.is_none());
-            assert!((a.document.layers[0].vectors.strokes[0].points[0].x - original_x - 40.).abs() < 0.001);
+            assert!(a.editing.selected_path.is_none());
+            assert!(a.document.selection.polygon.is_empty());
+            assert_eq!(a.document.layers[0].vectors.strokes[0].points[0].x, original_x);
         }
+    }
+
+    #[test]
+    fn opening_gallery_does_not_confirm_transform_before_choosing_a_pencil() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        draw(&mut a, &ctx, Pos2::new(35., 55.), Pos2::new(90., 65.));
+        let original = a.document.layers[0].vectors.clone();
+        let before = a.renderer.rgba8(&a.document);
+        let _ = ctx.run_ui(Default::default(), |ui| a.begin_transform(ui.ctx()));
+        let t = a.editing.transform.as_mut().unwrap();
+        t.target = t.target.translate(Vec2::new(40., 25.));
+        a.open_pencil_gallery();
+        assert!(a.editing.transform.is_some());
+        a.restore_pencil_preferences(); // Uses the same activation path as a gallery tile.
+        assert!(a.editing.transform.is_none());
+        assert_eq!(before, a.renderer.rgba8(&a.document));
+        assert!(Arc::ptr_eq(&original, &a.document.layers[0].vectors));
     }
 
     #[test]
@@ -743,6 +781,7 @@ mod tests {
             draw(&mut a, &ctx, Pos2::new(35., 55.), Pos2::new(90., 65.));
             let before = a.document.surface.graphite_mass.clone();
             let original = a.document.layers[0].vectors.clone();
+            a.editing.selected_path = Some(0);
             if pixels {
                 a.document.selection.set(vec![Vec2::new(20., 30.), Vec2::new(115., 30.),
                     Vec2::new(115., 90.), Vec2::new(20., 90.)], a.document.spec.width_px, a.document.spec.height_px);
@@ -771,8 +810,39 @@ mod tests {
             if confirm {
                 assert_ne!(before, a.document.surface.graphite_mass);
                 assert!(a.history.undo(&mut a.document));
+            } else {
+                assert!(a.document.selection.polygon.is_empty());
+                assert!(a.editing.selected_path.is_none());
             }
             assert_eq!(before, a.document.surface.graphite_mass);
+            assert!(Arc::ptr_eq(&original, &a.document.layers[0].vectors));
+        }}
+    }
+
+    #[test]
+    fn escape_cancels_transform_and_selection_in_normal_and_fullscreen_views() {
+        for pixels in [false, true] { for fullscreen in [false, true] {
+            let mut a = app();
+            let ctx = egui::Context::default();
+            draw(&mut a, &ctx, Pos2::new(35., 55.), Pos2::new(90., 65.));
+            let before = a.renderer.rgba8(&a.document);
+            let original = a.document.layers[0].vectors.clone();
+            a.editing.selected_path = Some(0);
+            if pixels {
+                a.document.selection.set(vec![Vec2::new(20., 30.), Vec2::new(115., 30.),
+                    Vec2::new(115., 90.), Vec2::new(20., 90.)], a.document.spec.width_px, a.document.spec.height_px);
+            }
+            let _ = ctx.run_ui(Default::default(), |ui| a.begin_transform(ui.ctx()));
+            let t = a.editing.transform.as_mut().unwrap();
+            t.target = t.target.translate(Vec2::new(40., 25.));
+            a.fullscreen = fullscreen;
+            interface_frame(&mut a, &ctx, vec![egui::Event::Key { key: egui::Key::Escape,
+                physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+            assert!(!a.fullscreen);
+            assert!(a.editing.transform.is_none());
+            assert!(a.editing.selected_path.is_none());
+            assert!(a.document.selection.polygon.is_empty());
+            assert_eq!(before, a.renderer.rgba8(&a.document));
             assert!(Arc::ptr_eq(&original, &a.document.layers[0].vectors));
         }}
     }

@@ -337,7 +337,6 @@ impl GraphiteApp {
     }
     pub(super) fn open_pencil_gallery(&mut self) {
         self.finish_stroke();
-        self.apply_transform();
         self.paper_settings.open = false;
         self.gallery.open = true;
     }
@@ -601,7 +600,7 @@ impl GraphiteApp {
             use_pencil=None;
         }
         if add_folder {
-            if let Some(directory)=rfd::FileDialog::new().set_title("Add pencil folder collection").pick_folder() {
+            if let Some(directory)=self.file_dialog().set_title("Add pencil folder collection").pick_folder() {
                 match self.gallery.data.add_folder(&directory,&self.settings) {
                     Ok(name)=>{self.gallery.folder=name.clone();self.gallery.edit_folder=name;self.gallery.search.clear();self.gallery.selected=None;self.gallery.previews.clear();self.gallery.persist();},
                     Err(e)=>self.gallery.message=format!("Folder not added: {e}")

@@ -5,6 +5,7 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.23.7](#v0237)
 - [v0.23.6](#v0236)
 - [v0.23.5](#v0235)
 - [v0.23.4](#v0234)
@@ -63,6 +64,17 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.23.7
+
+- Selecting a tool from the toolbar or a keyboard shortcut cancels the pending transform, restores the artwork before that transform, and clears its vector or pixel selection.
+- Applies to move, resize and rotate previews. Cancellation preserves editable paths and creates no extra undo entry.
+- Opening Pencil gallery no longer confirms a transform; choosing a pencil cancels it through the shared tool-selection behavior.
+- Cancel (the cross) and Esc also clear the vector or pixel selection when restoring the artwork. Esc does this while exiting fullscreen too. The checkmark and Enter still explicitly confirm transforms.
+- Windows file and folder pickers are now owned by the live Graphite Studio window, so Windows positions and stacks them with the application on its current monitor. This covers project Open/Save As, ABR import, paper-image import and folder collections. The owner refreshes if the native window changes; no monitor coordinates are cached.
+- Dialog ownership is connected to the native Windows dialog API; physical placement on the EasyCanvas display still needs a user check. No desktop input was taken over during verification.
+- Updated transform guidance and the GitHub README. Release notes remain consolidated in this file.
+- All 171 regression tests pass. Real UI-event tests cover every toolbar tool with vector and pixel transforms, tool shortcuts, gallery activation, exact restoration and undo; explicit confirmation and cancellation checks also pass.
 
 ## v0.23.6
 

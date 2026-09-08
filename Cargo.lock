@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "graphite-studio"
-version = "0.23.6"
+version = "0.23.7"
 dependencies = [
  "bytemuck",
  "eframe",

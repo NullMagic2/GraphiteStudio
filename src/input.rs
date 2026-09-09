@@ -96,6 +96,18 @@ impl PressureInputState {
             self.clear_live();
             return;
         }
+        // Hover explicitly means the nib is no longer touching. Some tablet
+        // driver/UI handoffs omit Up; release that contact before the next Down.
+        // Never synthesize a drawing press from an unowned Move packet.
+        if (self.native_id == Some(packet.id) && packet.phase == PenPhase::Hover)
+            || (self.native_id.is_some() && packet.phase == PenPhase::Down)
+        {
+            self.pen_frames.push(PointerFrame { primary_released: true, ..Default::default() });
+            self.native_id = None;
+            self.native_last = None;
+            self.native_filtered_pressure = None;
+            self.clear_live();
+        }
         let position = Pos2::new(packet.client_px[0] / ppp, packet.client_px[1] / ppp);
         let over_canvas = rect.contains(position);
         if packet.phase == PenPhase::Hover {
@@ -464,6 +476,39 @@ fn normalize_pressure(raw: f32) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_new_pen_id_can_recover_a_missing_release() {
+        let mut state=PressureInputState::default();
+        feed(&mut state,sample(PenPhase::Down,100,40.,Some(0.3)));
+        state.take_pen_frames();
+        let mut next=sample(PenPhase::Down,120,80.,Some(0.2)); next.id=9;
+        feed(&mut state,next);
+        let frames=state.take_pen_frames();
+        assert_eq!(frames.len(),2);
+        assert!(frames[0].primary_released && frames[1].primary_pressed);
+        assert_eq!(state.native_id,Some(9));
+    }
+    #[test]
+    fn tablet_hover_and_new_down_recover_missing_up_without_phantom_strokes() {
+        for phase in [PenPhase::Hover,PenPhase::Down] {
+            let mut state=PressureInputState::default();
+            feed(&mut state,sample(PenPhase::Down,100,40.,Some(0.9)));
+            state.take_pen_frames();
+            feed(&mut state,sample(phase,120,80.,Some(0.1)));
+            let frames=state.take_pen_frames();
+            assert!(frames[0].primary_released && frames[0].position.is_none());
+            if phase == PenPhase::Hover {
+                assert!(state.native_id.is_none());
+                feed(&mut state,sample(PenPhase::Move,121,90.,Some(0.1)));
+                assert!(state.take_pen_frames().is_empty());
+                feed(&mut state,sample(PenPhase::Down,122,90.,Some(0.1)));
+                assert!(state.take_pen_frames()[0].primary_pressed);
+            } else {
+                assert!(frames[1].primary_pressed);
+                assert!((frames[1].pressure-normalize_pressure(0.1)).abs()<0.00001);
+            }
+        }
+    }
     #[test]
     fn barrel_rotation_is_separate_from_tilt_and_zero_is_valid() {
         let mut state = PressureInputState::default();

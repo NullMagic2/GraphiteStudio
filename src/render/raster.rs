@@ -46,6 +46,7 @@ impl RasterRenderer {
                     let opacity = layer.opacity as f32 / 255.;
                     for (offset, color) in row.iter_mut().enumerate() {
                         let i = document.index(rect.min_x + offset, y);
+                        if outside_page(document, i) { *color = artwork_preview(document, i); continue; }
                         let rgb = composite_deposit(paper_pixel_rgb(document, i),
                             document.surface.deposit_pixel(i), layer.blend_mode, opacity);
                         *color = Color32::from_rgb(to_u8(rgb[0]), to_u8(rgb[1]), to_u8(rgb[2]));
@@ -66,6 +67,7 @@ impl RasterRenderer {
                     }
                     for offset in 0..len {
                         let i = document.index(x + offset, y);
+                        if outside_page(document, i) { row[local_x+offset] = artwork_preview(document, i); continue; }
                         let mut rgb = paper_pixel_rgb(document, i);
                         for &(mode, opacity, span) in &spans {
                             let deposit = span.map_or_else(|| document.surface.deposit_pixel(i), |s| s[offset]);
@@ -136,8 +138,12 @@ impl DocumentRenderer for RasterRenderer {
 
         let image = self.image.as_ref().expect("renderer image initialized");
         let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
-        for pixel in &image.pixels {
-            bytes.extend_from_slice(&pixel.to_array());
+        for (i, pixel) in image.pixels.iter().enumerate() {
+            // Keep this display-only correction independent of export behavior.
+            if outside_page(document, i) {
+                let rgb = shade_pixel_rgb(document, i % document.spec.width_px, i / document.spec.width_px);
+                bytes.extend_from_slice(&[to_u8(rgb[0]),to_u8(rgb[1]),to_u8(rgb[2]),255]);
+            } else { bytes.extend_from_slice(&pixel.to_array()); }
         }
         bytes
     }
@@ -153,6 +159,33 @@ impl DocumentRenderer for RasterRenderer {
             }
         }
         samples
+    }
+}
+
+fn outside_page(document: &Document, i: usize) -> bool {
+    let Some([x,y,w,h]) = document.page else { return false; };
+    let px=i % document.spec.width_px;
+    let py=i / document.spec.width_px;
+    px<x || py<y || px>=x+w || py>=y+h
+}
+
+// The backing store can grow, but the visible paper cannot. Outside its original
+// bounds, composite only artwork over transparency so the workspace shows through.
+fn artwork_preview(document: &Document, i: usize) -> Color32 {
+    let mut rgb=[0.;3];
+    let mut alpha=0.;
+    for (n,layer) in document.layers.iter().enumerate() {
+        if !layer.visible || layer.opacity==0 { continue; }
+        let (source,density)=deposit_optics(document.layer_deposit_pixel(n,i));
+        let a=density*layer.opacity as f32/255.;
+        if a==0. {continue;}
+        let base=if alpha>0. {rgb.map(|v|v/alpha)} else {[0.;3]};
+        let blend=blend_color(base,source,1.,layer.blend_mode);
+        rgb=std::array::from_fn(|c|rgb[c]*(1.-a)+a*((1.-alpha)*source[c]+alpha*blend[c]));
+        alpha+=a*(1.-alpha);
+    }
+    if alpha==0. {Color32::TRANSPARENT} else {
+        Color32::from_rgba_unmultiplied(to_u8(rgb[0]/alpha),to_u8(rgb[1]/alpha),to_u8(rgb[2]/alpha),to_u8(alpha))
     }
 }
 
@@ -331,6 +364,23 @@ fn to_u16(v: f32) -> u16 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn expanded_preview_keeps_paper_fixed_and_outside_artwork_visible() {
+        let mut doc=tiny_document();
+        doc.page=Some([1,1,2,2]);
+        let outside=doc.index(0,0);
+        let inside=doc.index(1,1);
+        let paper=shade_pixel_color32(&doc,1,1);
+        let mut renderer=RasterRenderer::default();
+        assert_eq!(renderer.render_full(&doc).pixels[outside],Color32::TRANSPARENT);
+        assert_eq!(renderer.render_full(&doc).pixels[inside],paper);
+        seed_active_color(&mut doc,outside,[0.8,0.2,0.1]);
+        let shown=renderer.render_full(&doc).pixels[outside];
+        assert!(shown.a()>0);
+        doc.paper_albedo[outside]=[0.,1.,0.];
+        assert_eq!(renderer.render_region(&doc,DirtyRect::new(0,0,1,1)).pixels[0],shown);
+        assert_eq!(renderer.render_full(&doc).pixels[inside],paper);
+    }
     #[test]
     fn saturation_preserves_hue_luminosity_and_handles_gray_opacity_and_gamut() {
         let base = [0.2,0.4,0.6];

@@ -1,4 +1,4 @@
-//! Optional Wacom / XP-Pen Wintab input. ABI and axis conventions follow Wacom's Wintab
+//! Optional Wacom / XP-Pen / Gaomon Wintab input. ABI and axis conventions follow Wacom's Wintab
 //! reference and official WintabDN / TiltTest examples. No driver DLL is bundled.
 use crate::input::{PenPhase, PenSample};
 use std::{
@@ -478,6 +478,15 @@ impl WintabBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gaomon_pressure_ranges_are_driver_reported_not_brand_fixed() {
+        for max in [8191,16383] {
+            let axis=Axis {min:0,max,..Default::default()};
+            assert_eq!(axis.pressure(0),Some(0.));
+            assert_eq!(axis.pressure(max as u32),Some(1.));
+            assert!((axis.pressure((max/2) as u32).unwrap()-0.5).abs()<0.001);
+        }
+    }
     #[test]
     fn native_abi_layout_and_optional_packet_fields() {
         assert_eq!(std::mem::size_of::<LogContext>(), 172);

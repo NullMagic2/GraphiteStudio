@@ -22,6 +22,30 @@ pub(super) struct QuickControls {
 mod tests {
     use super::*;
     #[test]
+    fn native_tablet_draws_on_first_contact_after_size_popup_even_after_missing_release() {
+        let mut app=GraphiteApp::with_render_state(None);
+        app.replace_document(CanvasSpec::from_physical("Tablet resume",40.,50.,120.));
+        let ctx=egui::Context::default();
+        for _ in 0..3 { frame(&mut app,&ctx,Default::default(),vec![]); }
+        let canvas=app.workspace_canvas.unwrap();
+        let start=app.viewport.document_to_screen(canvas,Vec2::new(60.,60.));
+        app.quick_controls.latched=true;
+        app.quick_controls.popup_rect=Some(Rect::from_min_size(Pos2::new(5.,5.),Vec2::new(100.,40.)));
+        app.quick_controls.pointer_down=true;
+        for step in 0..3 {
+            let _=ctx.run_ui(egui::RawInput {screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(1440.,920.))),..Default::default()},|ui| {
+                let input=PointerFrame {position:Some(start+Vec2::new(step as f32*8.,0.)),
+                    primary_pressed:step==0,primary_down:true,primary_released:step==2,
+                    pressure:0.7,pressure_from_device:true,over_canvas:true,..Default::default()};
+                assert!(!app.quick_controls.block_input(input));
+                app.handle_drawing_input(ui,canvas,input);
+            });
+        }
+        assert!(!app.quick_controls.is_open());
+        assert!(app.document.surface.graphite_mass.iter().any(|&v|v>0.));
+        assert!(app.history.can_undo());
+    }
+    #[test]
     fn fullscreen_toolbar_drag_keeps_controls_usable_without_drawing() {
         let mut a=GraphiteApp::with_render_state(None);a.fullscreen=true;
         a.replace_document(CanvasSpec::from_physical("Toolbar drag",40.,50.,120.));
@@ -205,14 +229,14 @@ mod tests {
         assert!(!popup.contains(outside));
         click(&mut app,&ctx,outside,egui::Modifiers::NONE);
         assert!(!app.quick_controls.is_open());
-        assert!(!app.history.can_undo(),"The dismissal click must not draw");
-        assert!(app.document.surface.graphite_mass.iter().all(|&m|m==0.));
-        // A native pen dismissal likewise owns the entire contact until lift.
+        assert!(app.history.can_undo(),"The first canvas press after sizing must draw");
+        assert!(app.document.surface.graphite_mass.iter().any(|&m|m>0.));
+        // Native pen contacts likewise draw on the first press after sizing.
         let mut controls=QuickControls{latched:true,popup_rect:Some(popup),..Default::default()};
-        assert!(controls.block_input(PointerFrame{position:Some(outside),primary_pressed:true,primary_down:true,..Default::default()}));
+        assert!(!controls.block_input(PointerFrame{position:Some(outside),primary_pressed:true,primary_down:true,..Default::default()}));
         assert!(!controls.is_open());
-        assert!(controls.block_input(PointerFrame{position:Some(outside),primary_down:true,..Default::default()}));
-        assert!(controls.block_input(PointerFrame{position:Some(outside),primary_released:true,..Default::default()}));
+        assert!(!controls.block_input(PointerFrame{position:Some(outside),primary_down:true,..Default::default()}));
+        assert!(!controls.block_input(PointerFrame{position:Some(outside),primary_released:true,..Default::default()}));
         assert!(!controls.block_input(PointerFrame::default()));
     }
     #[test]
@@ -266,8 +290,9 @@ impl QuickControls {
     fn dismiss_outside(&mut self,position:Option<Pos2>,pressed:bool) {
         if self.is_open() && pressed && position.is_some_and(|p|self.popup_rect.is_some_and(|r|!r.contains(p))) {
             self.close_size();
-            // Dismissing on the paper must not start a mark or transform drag.
-            self.pointer_down=true;
+            // A fresh canvas press closes Size and begins the next stroke.
+            // Contacts begun on a control remain blocked until they lift.
+            self.pointer_down=false;
             self.dismissed_press=true;
         }
     }
@@ -275,6 +300,8 @@ impl QuickControls {
         self.is_open() || position.is_some_and(|p|self.rects.iter().any(|r|r.contains(p)))
     }
     pub(super) fn block_input(&mut self,input:PointerFrame)->bool {
+        // A new contact also clears stale ownership after a driver missed Up.
+        if input.primary_pressed { self.pointer_down=false; }
         // Native pen packets can arrive without a promoted egui mouse press.
         self.dismiss_outside(input.position,input.primary_pressed);
         let over=self.covers(input.position);

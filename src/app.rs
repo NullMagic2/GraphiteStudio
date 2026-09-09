@@ -465,7 +465,7 @@ impl GraphiteApp {
             layers_panel_width: 250.,
             fit_requested: true,
             sidebar_statistics: (0, 0.0, 0.0),
-            status: "Ready. Graphite Studio v0.24.16".to_owned(),
+            status: "Ready. Graphite Studio v0.24.18".to_owned(),
         }
     }
 

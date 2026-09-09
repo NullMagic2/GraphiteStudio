@@ -1,6 +1,6 @@
 [package]
 name = "graphite-studio"
-version = "0.24.16"
+version = "0.24.18"
 edition = "2021"
 rust-version = "1.88"
 description = "A modular physically-inspired graphite drawing application"

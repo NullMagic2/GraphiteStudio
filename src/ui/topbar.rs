@@ -159,7 +159,7 @@ pub fn show_topbar(
                         action = TopbarAction::TabletBackend(wintab);
                     }
                 }
-                ui.small("Switches immediately. Windows Ink for EasyCanvas; Wintab for compatible Wacom / XP-Pen drivers.");
+                ui.small("Switches immediately. Windows Ink for EasyCanvas; Wintab for compatible Wacom / XP-Pen / Gaomon drivers.");
                 ui.separator();
             }
             #[cfg(not(windows))]

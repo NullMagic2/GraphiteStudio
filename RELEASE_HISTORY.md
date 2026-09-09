@@ -5,6 +5,8 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.24.18](#v02418)
+- [v0.24.17](#v02417)
 - [v0.24.16](#v02416)
 - [v0.24.15](#v02415)
 - [v0.24.14](#v02414)
@@ -83,6 +85,17 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.24.18
+
+- Minimal preview fix: growing the artwork backing store no longer extends the visible paper texture. Outside the original page, only artwork is shown over the workspace. Drawing, movement, page coordinates and export behavior are unchanged.
+
+## v0.24.17
+
+- The first canvas contact after changing brush size now closes the popup and draws immediately, instead of consuming an extra click. Slider drags stay blocked until lift.
+- Recover stale control ownership on fresh pen contact, and recover missing Up packets when the driver reports Hover or a new Down. Unowned Move packets cannot start phantom strokes.
+- Added Gaomon guidance for the existing Windows Ink/Wintab backends and driver-reported 8192/16384-level pressure range coverage. No driver installation or system settings are changed.
+- Added native input, first-stroke-after-size, and missed-release regression tests. Physical Gaomon hardware was not available for verification.
 
 ## v0.24.16
 

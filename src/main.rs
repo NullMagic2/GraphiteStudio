@@ -69,7 +69,7 @@ fn run() -> eframe::Result {
     };
 
     eframe::run_native(
-        "Graphite Studio v0.24.16",
+        "Graphite Studio v0.24.18",
         options,
         Box::new(move |cc| Ok(Box::new(GraphiteApp::new(cc, acceleration)))),
     )

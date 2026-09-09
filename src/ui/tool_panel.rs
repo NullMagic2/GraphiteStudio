@@ -50,7 +50,7 @@ pub fn show_tool_panel(
         ui.add(egui::Slider::new(&mut settings.pen_pressure_gamma,0.55..=1.8).text("Pressure feel"))
             .on_hover_text("Below 1: responds to a lighter touch. Above 1: needs firmer pressure. Applies to device pressure only.");
         if ui.small_button("Reset pressure feel").clicked() { settings.pen_pressure_gamma=1.0; }
-        ui.small("Use Windows Ink for EasyCanvas and current Wacom drivers. Try Wintab for an older Bamboo, XP-Pen Star 03 or another Wintab setup. Tilt and barrel rotation require a pen that reports them; unsupported sensors use the manual settings.");
+        ui.small("Use Windows Ink for EasyCanvas and current Wacom drivers. Try Wintab for an older Bamboo, XP-Pen Star 03, Gaomon or another Wintab setup. Tilt and barrel rotation require a pen that reports them; unsupported sensors use the manual settings.");
         ui.small("Drag with two fingers to move the paper, pinch to zoom, and twist to rotate. R selects mouse view rotation; P or B selects Pencil; E selects Eraser.");
     });
 

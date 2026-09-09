@@ -6,6 +6,10 @@ Graphite Studio models how a pencil contacts paper, deposits pigment, wears down
 
 **Current version: v0.24.15** · [Release history](RELEASE_HISTORY.md) · [MIT license](LICENSE)
 
+<img width="3840" height="2050" alt="image" src="https://github.com/user-attachments/assets/cca4ee75-ae5f-4bd1-a4a3-db756cac7a65" />
+
+
+
 ## Features
 
 - **Expressive pencils:** pressure-sensitive width and tone, tilt shading, adjustable sharpness, gradual tip wear, line smoothing. Holding the pencil still preserves the freehand stroke. Core diameter reaches 200 px.
@@ -17,6 +21,8 @@ Graphite Studio models how a pencil contacts paper, deposits pigment, wears down
 - **Flexible workspace:** multiple drawing tabs, resizable and collapsible panels, custom paper dimensions, DPI, textures and color, portrait/landscape orientation, fit-to-screen and fullscreen drawing.
 - **Pen and touch:** selectable Windows Ink and Wintab input, pressure calibration, and canvas pinch, pan and rotation when the device or bridge forwards those gestures.
 - **GPU acceleration:** Vulkan or DirectX 12 compute for eligible pencil and eraser strokes, with bounded buffers and CPU fallback. The display preserves texture with antialiasing and linear-light downsampling.
+
+
 
 ## Run on Windows
 

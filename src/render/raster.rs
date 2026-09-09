@@ -282,7 +282,28 @@ fn deposit_optics(deposit: PixelDepositState) -> ([f32; 3], f32) {
     (pencil_rgb, optical_density)
 }
 
+// Nonseparable Saturation (PDF/W3C): retain backdrop hue and luminosity,
+// use source saturation, and clip the gamut while preserving luminosity.
+fn saturation_color(base: [f32; 3], source: [f32; 3]) -> [f32; 3] {
+    let lum = |c: [f32; 3]| 0.3*c[0] + 0.59*c[1] + 0.11*c[2];
+    let min = |c: [f32; 3]| c[0].min(c[1]).min(c[2]);
+    let max = |c: [f32; 3]| c[0].max(c[1]).max(c[2]);
+    let range = max(base) - min(base);
+    if range == 0. { return base; }
+    let sat = max(source) - min(source);
+    let mut color = base.map(|v| (v-min(base))*sat/range);
+    let l = lum(base);
+    let shift = l-lum(color);
+    color = color.map(|v| v+shift);
+    let lo = min(color);
+    let hi = max(color);
+    if lo < 0. { color = color.map(|v| l+(v-l)*l/(l-lo)); }
+    if hi > 1. { color = color.map(|v| l+(v-l)*(1.-l)/(hi-l)); }
+    color
+}
+
 fn blend_color(base: [f32; 3], pigment: [f32; 3], density: f32, mode: BlendMode) -> [f32; 3] {
+    let saturation = if mode == BlendMode::Saturation { saturation_color(base, pigment) } else { base };
     std::array::from_fn(|i| {
         let mixed = match mode {
             BlendMode::Normal => pigment[i],
@@ -292,6 +313,7 @@ fn blend_color(base: [f32; 3], pigment: [f32; 3], density: f32, mode: BlendMode)
             BlendMode::Darken => base[i].min(pigment[i]),
             BlendMode::Screen => 1.0 - (1.0 - base[i]) * (1.0 - pigment[i]),
             BlendMode::Lighten => base[i].max(pigment[i]),
+            BlendMode::Saturation => saturation[i],
         };
         (base[i] * (1.0 - density) + mixed * density).clamp(0.0, 1.0)
     })
@@ -309,6 +331,25 @@ fn to_u16(v: f32) -> u16 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn saturation_preserves_hue_luminosity_and_handles_gray_opacity_and_gamut() {
+        let base = [0.2,0.4,0.6];
+        let expected = [0.2405,0.3905,0.5405];
+        let got = blend_color(base,[0.1,0.2,0.4],1.,BlendMode::Saturation);
+        for i in 0..3 { assert!((got[i]-expected[i]).abs()<0.00001); }
+        let gray = blend_color(base,[0.8;3],1.,BlendMode::Saturation);
+        for v in gray { assert!((v-0.362).abs()<0.00001); }
+        assert_eq!(blend_color([0.5;3],[0.,1.,0.],1.,BlendMode::Saturation),[0.5;3]);
+        assert_eq!(blend_color(base,[0.,1.,0.],0.,BlendMode::Saturation),base);
+        let half = blend_color(base,[0.1,0.2,0.4],0.5,BlendMode::Saturation);
+        for i in 0..3 { assert!((half[i]-(base[i]+expected[i])*0.5).abs()<0.00001); }
+        for base in [[0.8,0.9,1.],[0.,0.1,0.2],[1.,1.,1.],[0.,0.,0.],[0.6,0.2,0.2]] {
+            let got = saturation_color(base,[0.,1.,0.]);
+            assert!(got.iter().all(|v| v.is_finite() && *v >= -0.00001 && *v <= 1.00001));
+            let lum = |c:[f32;3]| c[0]*0.3+c[1]*0.59+c[2]*0.11;
+            assert!((lum(got)-lum(base)).abs()<0.00001);
+        }
+    }
     #[test]
     fn cached_tile_spans_match_pixel_reference_after_layer_changes_and_partial_updates() {
         let spec = CanvasSpec { name: "Tile edges".into(), width_px: 73, height_px: 61,

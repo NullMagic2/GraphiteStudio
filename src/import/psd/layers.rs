@@ -331,6 +331,7 @@ pub(super) fn read(
             b"dark" => BlendMode::Darken,
             b"scrn" => BlendMode::Screen,
             b"lite" => BlendMode::Lighten,
+            b"sat " => BlendMode::Saturation,
             _ => {
                 return Err(format!(
                     "Layer '{}' uses unsupported blend mode '{}'.",

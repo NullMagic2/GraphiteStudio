@@ -378,3 +378,45 @@ fn photoshop_shapes_retain_cubic_handles_holes_strokes_and_saved_paths() {
         .unwrap();
     assert!(error.contains("Inside/outside"), "{error}");
 }
+
+#[test]
+fn photoshop_saturation_opens_and_survives_native_and_standard_psd_roundtrips() {
+    use graphite_studio::{core::document::BlendMode, export::{save_rendered_document, SaveOptions}};
+    for source_depth in [8,16] {
+        let loaded = import::open(&fixtures().join(format!("saturation-{source_depth}.psd"))).unwrap();
+        assert!(!loaded.editable_source);
+        let p = loaded.project;
+        assert_eq!(p.document.layers.len(),3);
+        let layer = p.document.layers.iter().position(|l| l.blend_mode == BlendMode::Saturation).unwrap();
+        let expected = RasterRenderer::default().rgba8(&p.document);
+        let path = temp(&format!("sat-{source_depth}.graphite"));
+        project::save(&path,&data(&p)).unwrap();
+        let reopened = import::open(&path).unwrap().project;
+        assert_eq!(reopened.document.layers[layer].blend_mode,BlendMode::Saturation);
+        assert_eq!(RasterRenderer::default().rgba8(&reopened.document),expected);
+        std::fs::remove_file(&path).unwrap();
+        for depth in [PsdBitDepth::Eight,PsdBitDepth::Sixteen] {
+            for native in [false,true] {
+                let path = temp(&format!("sat-{source_depth}-{}-{native}.psd",depth.bits()));
+                if native { project::save_psd(&path,&data(&p),&mut RasterRenderer::default(),depth).unwrap(); }
+                else { save_rendered_document(&mut RasterRenderer::default(),&p.document,&path,
+                    SaveOptions {psd_bit_depth:depth}).unwrap(); }
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(bytes.windows(8).any(|b| b == b"8BIMsat "));
+                let reopened = import::open(&path).unwrap();
+                assert_eq!(reopened.editable_source,native);
+                let doc = &reopened.project.document;
+                let shift = usize::from(!native); // standard PSD contains explicit Paper
+                assert_eq!(doc.layers.len(),p.document.layers.len()+shift);
+                for (i,l) in p.document.layers.iter().enumerate() {
+                    let got = &doc.layers[i+shift];
+                    assert_eq!(got.name,l.name); assert_eq!(got.blend_mode,l.blend_mode);
+                    assert_eq!(got.visible,l.visible); assert_eq!(got.opacity,l.opacity);
+                }
+                let rgba = RasterRenderer::default().rgba8(doc);
+                assert!(rgba.iter().zip(&expected).all(|(a,b)| a.abs_diff(*b) <= 1));
+                std::fs::remove_file(&path).unwrap();
+            }
+        }
+    }
+}

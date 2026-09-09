@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "graphite-studio"
-version = "0.24.15"
+version = "0.24.16"
 dependencies = [
  "ahash",
  "bytemuck",

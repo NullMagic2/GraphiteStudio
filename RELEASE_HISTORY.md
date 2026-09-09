@@ -5,6 +5,7 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.24.16](#v02416)
 - [v0.24.15](#v02415)
 - [v0.24.14](#v02414)
 - [v0.24.13](#v02413)
@@ -82,6 +83,12 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.24.16
+
+- Added Saturation to the layer blend menu and the shared preview/export compositor, using nonseparable hue/luminosity-preserving saturation blending with opacity and gamut handling.
+- Recognize and write Photoshop's `sat ` blend key instead of rejecting the layer. Preserve individual layers and their modes in 8-bit/16-bit PSD and Graphite round trips.
+- Added independent saturation PSD fixtures, reference-color/gamut/opacity checks, and round trips through both native editable saves and standard PSD records without Graphite metadata.
 
 ## v0.24.15
 

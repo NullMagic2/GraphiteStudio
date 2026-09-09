@@ -65,6 +65,7 @@ fn key(mode: BlendMode) -> &'static [u8; 4] {
         BlendMode::Darken => b"dark",
         BlendMode::Screen => b"scrn",
         BlendMode::Lighten => b"lite",
+        BlendMode::Saturation => b"sat ",
     }
 }
 

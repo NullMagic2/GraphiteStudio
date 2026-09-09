@@ -91,15 +91,17 @@ pub enum BlendMode {
     Darken,
     Screen,
     Lighten,
+    Saturation,
 }
 
 impl BlendMode {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Multiply,
         Self::Normal,
         Self::Darken,
         Self::Screen,
         Self::Lighten,
+        Self::Saturation,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -108,6 +110,7 @@ impl BlendMode {
             Self::Darken => "Darken",
             Self::Screen => "Screen",
             Self::Lighten => "Lighten",
+            Self::Saturation => "Saturation",
         }
     }
 }

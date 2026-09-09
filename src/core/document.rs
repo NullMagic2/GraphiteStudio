@@ -155,6 +155,10 @@ pub struct LayerSelection {
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Document {
+    /// Original page within an expandable backing canvas: x, y, width, height.
+    /// Older files use the entire canvas as their page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<[usize; 4]>,
     /// Workspace selection is per drawing and never part of the saved artwork.
     #[serde(skip)]
     pub layer_selection: LayerSelection,
@@ -198,6 +202,7 @@ impl Document {
         let (contact_support, edge_grain) =
             generate_contact_response(width, height, paper, &rest_height, &fiber);
         Self {
+            page: None,
             color_grain: super::paper::generate_color_grain(width, height, spec.dpi),
             layer_selection: Default::default(),
             selection: Default::default(),
@@ -218,6 +223,12 @@ impl Document {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+    pub fn page_bounds(&self) -> [usize;4] {
+        self.page.unwrap_or([0,0,self.spec.width_px,self.spec.height_px])
+    }
+    pub fn page_origin(&self) -> eframe::egui::Vec2 {
+        let p=self.page_bounds(); eframe::egui::vec2(p[0] as f32,p[1] as f32)
     }
     #[inline]
     pub fn index(&self, x: usize, y: usize) -> usize {

@@ -9,6 +9,9 @@ pub struct LineSmoother {
     distance: f32,
 }
 impl LineSmoother {
+    pub fn translate(&mut self, delta:Vec2) {
+        self.raw.x+=delta.x;self.raw.y+=delta.y;self.filtered+=delta;
+    }
     pub fn new(start: StrokePoint, amount: f32, zoom: f32) -> Self {
         let amount = amount.clamp(0., 1.);
         Self {

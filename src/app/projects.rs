@@ -97,6 +97,7 @@ impl GraphiteApp {
         }
     }
     pub(super) fn save_document_path(&mut self, path: &Path) {
+        self.finish_liquify(true);
         self.finish_stroke();
         self.apply_transform();
         if path
@@ -112,6 +113,7 @@ impl GraphiteApp {
         }
     }
     pub(super) fn save_project_path(&mut self, path: &Path) -> Result<(), String> {
+        self.finish_liquify(true);
         self.finish_stroke();
         self.apply_transform();
         let data = graphite_studio::project::ProjectRef {
@@ -188,10 +190,12 @@ impl GraphiteApp {
             }
         };
         let dpi = project.document.spec.dpi;
+        let expanded=project.document.page.is_some();
         let state = DrawingState {
             document: project.document,
             history: History::default(),
             viewport: ViewportState {
+                unbounded: expanded,
                 rotation: 0.,
                 zoom: project.zoom,
                 free_pan: Vec2::new(project.pan[0], project.pan[1]),

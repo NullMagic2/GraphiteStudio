@@ -201,6 +201,11 @@ fn validate(
 ) -> Result<(), String> {
     let (w, h) = (doc.spec.width_px, doc.spec.height_px);
     let n = crate::limits::canvas_pixels(w, h)?;
+    if let Some([x,y,pw,ph]) = doc.page {
+        if pw == 0 || ph == 0 || x.checked_add(pw).is_none_or(|v|v>w) || y.checked_add(ph).is_none_or(|v|v>h) {
+            return Err("Invalid project page bounds".into());
+        }
+    }
     if w == 0
         || h == 0
         || !doc.spec.dpi.is_finite()

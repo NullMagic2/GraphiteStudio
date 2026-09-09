@@ -27,6 +27,7 @@ pub struct CanvasLayout {
 
 #[derive(Debug, Clone)]
 pub struct ViewportState {
+    pub unbounded: bool,
     pub zoom: f32,
     /// View-only rotation; document pixels and path coordinates remain unchanged.
     pub rotation: f32,
@@ -38,6 +39,7 @@ pub struct ViewportState {
 impl Default for ViewportState {
     fn default() -> Self {
         Self {
+            unbounded: false,
             zoom: 1.0,
             rotation: 0.,
             free_pan: Vec2::ZERO,
@@ -112,12 +114,12 @@ impl ViewportState {
         };
 
         let sheet_x = if overflow[0] {
-            Self::WORKSPACE_MARGIN
+            Self::WORKSPACE_MARGIN + if self.unbounded {self.free_pan.x} else {0.}
         } else {
             (view_size.x - sheet_size.x) * 0.5 + self.free_pan.x
         };
         let sheet_y = if overflow[1] {
-            Self::WORKSPACE_MARGIN
+            Self::WORKSPACE_MARGIN + if self.unbounded {self.free_pan.y} else {0.}
         } else {
             (view_size.y - sheet_size.y) * 0.5 + self.free_pan.y
         };
@@ -133,10 +135,10 @@ impl ViewportState {
     /// Pan the paper directly on axes where it fits entirely in the viewport. Overflowing axes
     /// are panned by the surrounding ScrollArea, so they are intentionally ignored here.
     pub fn pan_fitting_axes(&mut self, delta: Vec2, layout: CanvasLayout) {
-        if !layout.overflow[0] {
+        if self.unbounded || !layout.overflow[0] {
             self.free_pan.x += delta.x;
         }
-        if !layout.overflow[1] {
+        if self.unbounded || !layout.overflow[1] {
             self.free_pan.y += delta.y;
         }
     }
@@ -218,6 +220,10 @@ impl ViewportState {
         let preliminary = self.layout(view_size, doc_size_px);
         let new_anchor = Self::rotate_vector(doc_at_cursor, self.rotation) * new_zoom
             + preliminary.sheet_size * 0.5;
+        if self.unbounded {
+            self.free_pan+=current_scroll_offset+cursor_in_view-preliminary.sheet_min-new_anchor;
+            return Vec2::ZERO;
+        }
         let mut desired_scroll = current_scroll_offset;
 
         if preliminary.overflow[0] {
@@ -336,6 +342,7 @@ mod tests {
                     zoom: initial_zoom,
                     rotation: 0.,
                     free_pan: Vec2::ZERO,
+                    unbounded: false,
                 };
                 let offset = Vec2::new(
                     if initial_zoom >= 1. { 200. } else { 0. },
@@ -374,6 +381,7 @@ mod tests {
                 zoom: initial_zoom,
                 rotation: 0.,
                 free_pan: Vec2::ZERO,
+                unbounded: false,
             };
             let offset = if initial_zoom >= 1.0 {
                 Vec2::new(200., 300.)
@@ -410,6 +418,7 @@ mod tests {
             zoom: 2.0,
             rotation: 0.,
             free_pan: Vec2::new(100.0, -80.0),
+            unbounded: false,
         };
         viewport.fit(Vec2::new(1000.0, 700.0), Vec2::new(800.0, 1200.0));
         assert_eq!(viewport.free_pan, Vec2::ZERO);

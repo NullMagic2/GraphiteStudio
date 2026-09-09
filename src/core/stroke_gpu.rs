@@ -93,12 +93,14 @@ static GPU: OnceLock<Mutex<Option<GpuStroke>>> = OnceLock::new();
 static ENABLED: AtomicBool = AtomicBool::new(true);
 static COMPLETED: AtomicU64 = AtomicU64::new(0);
 pub fn set_enabled(enabled: bool) {
+    super::liquify_gpu::set_enabled(enabled);
     ENABLED.store(enabled, Ordering::Relaxed);
 }
 pub fn completed_batches() -> u64 {
     COMPLETED.load(Ordering::Relaxed)
 }
 pub fn install(device: wgpu::Device, queue: wgpu::Queue) -> Result<(), String> {
+    let _=super::liquify_gpu::install(device.clone(),queue.clone());
     let engine = GpuStroke::new(device, queue)?;
     *GPU.get_or_init(|| Mutex::new(None))
         .lock()

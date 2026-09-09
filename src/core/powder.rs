@@ -99,8 +99,8 @@ pub fn apply(
             let mut work = coverage * work_scale * (0.8 + 0.2 * support);
             if random > 0. {
                 let patch = super::contact::contact_grain(
-                    (x as f32 + 0.5) * patch_scale + 17.3,
-                    (y as f32 + 0.5) * patch_scale + 31.7,
+                    (x as f32 + 0.5 - doc.page_origin().x) * patch_scale + 17.3,
+                    (y as f32 + 0.5 - doc.page_origin().y) * patch_scale + 31.7,
                 );
                 let density = patch * 0.8 + grain * 0.2;
                 work *= 1. + random * (density * 2. - 1.) * 0.95;

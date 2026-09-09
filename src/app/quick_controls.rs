@@ -13,11 +13,36 @@ pub(super) struct QuickControls {
     rects: Vec<Rect>,
     pointer_down: bool,
     dismissed_press: bool,
+    toolbar_position: Option<Pos2>,
+    toolbar_vertical: Option<bool>,
+    toolbar_size: Vec2,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fullscreen_toolbar_drag_keeps_controls_usable_without_drawing() {
+        let mut a=GraphiteApp::with_render_state(None);a.fullscreen=true;
+        a.replace_document(CanvasSpec::from_physical("Toolbar drag",40.,50.,120.));
+        let ctx=egui::Context::default();for _ in 0..3{frame(&mut a,&ctx,Default::default(),vec![]);}
+        let before=a.renderer.rgba8(&a.document);
+        let original=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new("quick_toolbar")).unwrap());
+        let grip=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new("quick_toolbar_grip")).unwrap().center());
+        let button=|p,pressed|egui::Event::PointerButton {pos:p,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()};
+        frame(&mut a,&ctx,Default::default(),vec![egui::Event::PointerMoved(grip),button(grip,true)]);
+        for i in 1..=8 {frame(&mut a,&ctx,Default::default(),vec![egui::Event::PointerMoved(grip+Vec2::new(25.,10.)*i as f32)]);}
+        let end=grip+Vec2::new(200.,80.);frame(&mut a,&ctx,Default::default(),vec![button(end,false)]);
+        for _ in 0..3 {frame(&mut a,&ctx,Default::default(),vec![]);}
+        let moved=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new("quick_toolbar")).unwrap());
+        assert!((moved.min-original.min).length()>120.);
+        let eraser=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new(("quick_tool",ToolKind::Eraser.label()))).unwrap());
+        click(&mut a,&ctx,eraser.center(),Default::default());assert_eq!(a.settings.tool,ToolKind::Eraser);
+        a.fullscreen=false;frame(&mut a,&ctx,Default::default(),vec![]);a.fullscreen=true;
+        for _ in 0..3{frame(&mut a,&ctx,Default::default(),vec![]);}
+        let reopened=ctx.data(|d|d.get_temp::<Rect>(egui::Id::new("quick_toolbar")).unwrap());assert!((reopened.min-moved.min).length()<1.);
+        assert!(a.renderer.rgba8(&a.document)==before);assert!(!a.history.can_undo());
+    }
     fn frame(app:&mut GraphiteApp,ctx:&egui::Context,modifiers:egui::Modifiers,events:Vec<egui::Event>)->egui::FullOutput {
         ctx.run_ui(egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(1440.,920.))),modifiers,events,..Default::default()},|ui|app.interface(ui))
     }
@@ -328,6 +353,7 @@ impl GraphiteApp {
     }
 
     fn quick_size(&self)->Option<(f32,f32,f32,&'static str)> {
+        if self.liquify.session.is_some(){return Some((self.liquify.settings.size,2.,1200.,"px"));}
         if let Some(scale)=self.transform_scale_percent(){return Some((scale,1.,400.,"%"));}
         let dpi=self.document.spec.dpi;
         match self.settings.tool {
@@ -343,6 +369,7 @@ impl GraphiteApp {
 
     fn set_quick_size(&mut self,value:f32) {
         if !value.is_finite(){return;}
+        if self.liquify.session.is_some(){self.liquify.settings.size=value.clamp(2.,1200.);return;}
         if self.editing.transform.is_some(){self.set_transform_scale_percent(value);return;}
         let Some((_,min,max,_))=self.quick_size() else{return;};
         let value=value.clamp(min,max);
@@ -386,6 +413,8 @@ impl GraphiteApp {
             }
         }
         if let Some((pos,vertical))=toolbar_placement(paper,view,self.fullscreen) {
+            let vertical=self.quick_controls.toolbar_vertical.unwrap_or(vertical);
+            let pos=self.quick_controls.toolbar_position.unwrap_or(pos).clamp(view.min,(view.max-self.quick_controls.toolbar_size).max(view.min));
             let response=egui::Area::new(egui::Id::new("canvas_quick_toolbar"))
                 .order(egui::Order::Foreground).fixed_pos(pos).movable(false).fade_in(false)
                 .show(ui.ctx(),|ui| {
@@ -393,6 +422,11 @@ impl GraphiteApp {
                         let layout=if vertical {egui::Layout::top_down(egui::Align::Center)}else{egui::Layout::left_to_right(egui::Align::Center)};
                         ui.with_layout(layout,|ui| {
                             ui.spacing_mut().item_spacing=Vec2::splat(4.);
+                            let (grip,drag)=ui.allocate_exact_size(if vertical {Vec2::new(48.,22.)}else{Vec2::new(22.,48.)},Sense::drag());
+                            for x in [-1.,1.] {for y in [-1.,0.,1.] {ui.painter().circle_filled(grip.center()+Vec2::new(x*4.,y*5.),1.6,Color32::from_gray(110));}}
+                            #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("quick_toolbar_grip"),grip));
+                            if drag.dragged(){self.quick_controls.toolbar_position=Some(pos+ui.input(|i|i.pointer.delta()));self.quick_controls.toolbar_vertical=Some(vertical);self.quick_controls.pointer_down=true;}
+                            drag.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text("Drag to move toolbar");
                             let collapsed=self.quick_controls.collapsed;
                             let arrow=match (vertical,collapsed) {(true,true)=>"▶",(true,false)=>"◀",(false,true)=>"▼",(false,false)=>"▲"};
                             let toggle=ui.add_sized([48.,36.],egui::Button::new(arrow))
@@ -405,7 +439,7 @@ impl GraphiteApp {
                             if self.quick_controls.collapsed {return;}
                             for tool in [ToolKind::Pencil,ToolKind::Eraser,ToolKind::VectorSelect,ToolKind::Tissue,ToolKind::Smudge] {
                                 let transform=tool==ToolKind::VectorSelect;
-                                let selected=if transform {self.editing.transform.is_some() || self.settings.tool==tool}else{self.editing.transform.is_none() && self.settings.tool==tool};
+                                let selected=self.liquify.session.is_none() && if transform {self.editing.transform.is_some() || self.settings.tool==tool}else{self.editing.transform.is_none() && self.settings.tool==tool};
                                 let response=if transform {
                                     let (rect,r)=ui.allocate_exact_size(Vec2::splat(48.),Sense::click());
                                     let visuals=ui.style().interact_selectable(&r,selected);
@@ -426,6 +460,7 @@ impl GraphiteApp {
                                         if self.editing.transform.is_none(){self.select_tool(ToolKind::VectorSelect);}
                                     }else{self.select_tool(tool);}
                                 }
+                                if transform && crate::ui::tool_icons::liquify_button(ui,self.liquify.session.is_some(),48.).clicked(){self.begin_liquify();}
                             }
                             let response=ui.add_enabled(self.quick_size().is_some(),egui::Button::new("Size").min_size(Vec2::splat(48.)));
                             #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("quick_size_button"),response.rect));
@@ -439,6 +474,7 @@ impl GraphiteApp {
                     });
                 });
             self.quick_controls.rects.push(response.response.rect);
+            self.quick_controls.toolbar_size=response.response.rect.size();
             #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new("quick_toolbar"),response.response.rect));
         }
         if self.quick_controls.is_open() {

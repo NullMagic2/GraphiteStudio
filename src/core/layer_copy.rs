@@ -7,7 +7,6 @@ pub(crate) struct LayerCopy {
 }
 impl LayerCopy {
     pub fn prepare(doc:&mut Document)->Option<Self> {
-        if doc.layers.len()>=256{return None;}
         let mut copy=doc.layers[doc.active_layer_index()].clone();
         let source=copy.id;
         copy.deposit.capture_from_surface(&doc.surface);
@@ -27,7 +26,7 @@ impl LayerCopy {
         let Some(source)=doc.layers.iter().position(|l|l.id==self.source) else{return false;};
         let existing=doc.layers.iter().position(|l|l.id==self.copy.id);
         if redo {
-            if existing.is_some() || doc.layers.len()>=256{return false;}
+            if existing.is_some(){return false;}
             doc.activate_layer(source);
             doc.layers.insert(source+1,self.copy.clone());
             doc.activate_layer(source+1);

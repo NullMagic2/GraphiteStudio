@@ -529,8 +529,6 @@ pub struct ToolSettings {
     pub eraser_strength: f32,
     /// Optional pencil position stabilization, from off (0) to maximum (1).
     pub line_smoothing: f32,
-    #[serde(default = "hold_to_straighten_default")]
-    pub hold_to_straighten: bool,
     pub brush_tip: Option<std::sync::Arc<super::brush::BrushTip>>,
     /// Imported relief for the physical pencil solver. Kept separate from the
     /// legacy stamp mask so previously saved Pencil paths retain their appearance.
@@ -582,7 +580,6 @@ impl Default for ToolSettings {
             particle_variation: 0.24,
             eraser_strength: 0.78,
             line_smoothing: 0.,
-            hold_to_straighten: true,
             brush_tip: None,
             pencil_texture: None,
             pencil_tip_shape: true,
@@ -602,10 +599,6 @@ impl Default for ToolSettings {
 
 fn default_tip_sharpness() -> f32 {
     0.5
-}
-
-fn hold_to_straighten_default() -> bool {
-    true
 }
 
 impl ToolSettings {

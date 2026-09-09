@@ -138,7 +138,6 @@ impl PencilPreset {
         target.pencil_color_rgb = s.pencil_color_rgb;
         target.particle_variation = s.particle_variation;
         target.line_smoothing = s.line_smoothing;
-        target.hold_to_straighten = s.hold_to_straighten;
         target.tilt_deg = s.tilt_deg;
         target.azimuth_deg = s.azimuth_deg;
         target.auto_azimuth = s.auto_azimuth;

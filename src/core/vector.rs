@@ -226,7 +226,7 @@ impl VectorStroke {
         let mut engine = self.engine.clone();
         let mut tip = self.tip.clone();
         if self.settings.tool == ToolKind::Pencil {
-            engine.begin_pencil_stroke(first);
+            engine.begin_pencil_stroke(StrokePoint { x:first.x-doc.page_origin().x,y:first.y-doc.page_origin().y,..first });
         }
         let old_selection = doc.selection.clone();
         doc.selection = self.selection.clone();

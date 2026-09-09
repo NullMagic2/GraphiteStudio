@@ -12,6 +12,11 @@ impl Selection {
         for p in &mut self.polygon {
             *p = turn.point(*p);
         }
+        if turn.expanded() && self.mask.is_some() {
+            let (w,h)=turn.size();
+            self.set(self.polygon.clone(),w,h);
+            return;
+        }
         if let Some(mask) = &mut self.mask {
             turn.grid(std::sync::Arc::make_mut(mask));
         }
@@ -87,9 +92,6 @@ impl Cutout {
             return Ok(None);
         }
         let (width, height) = (x1 - x0, y1 - y0);
-        if width * height > 4_000_000 {
-            return Err("Select a smaller area to transform (up to 4 million pixels).".into());
-        }
         let mut pixels = vec![PixelDepositState::default(); width * height];
         for y in y0..y1 {
             for x in x0..x1 {

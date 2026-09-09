@@ -5,6 +5,9 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 <details>
 <summary>Browse releases</summary>
 
+- [v0.24.15](#v02415)
+- [v0.24.14](#v02414)
+- [v0.24.13](#v02413)
 - [v0.24.12](#v02412)
 - [v0.24.11](#v02411)
 - [v0.24.10](#v02410)
@@ -79,6 +82,33 @@ All Graphite Studio release notes and changelog entries, newest first. Historica
 - [v0.1.0](#v010)
 
 </details>
+
+## v0.24.15
+
+- Improved Liquify responsiveness by sampling original material once per presented batch, with duplicate output pixels removed. Batched results match sequential material exactly.
+- Reduced field lookup and CPU fallback overhead; retained GPU shaders, background processing and adaptive antialiasing.
+- Large brushes publish smaller batches. Push skips stationary work and combines redundant straight samples without merging corners, pressure changes or distortion.
+- Push uses a centered swept footprint; momentum decays continuously and stops throwing after a pause before pen lift, making stroke following more natural.
+- A CPU benchmark of eight queued 600-pixel brush steps on a 768-pixel canvas improved from 1017/1046/862 ms to 528/567/459 ms for Push/Twirl Right/Crystals (median of three runs). These are worker timings, not display frame rates.
+
+## v0.24.14
+
+- Added a drag handle to the fullscreen toolbar. Moving it retains button functionality, prevents accidental drawing, and preserves its position when toggling fullscreen.
+- Added Liquify directly below Transform with an original turquoise droplet/spiral icon in both palettes and a material-sidebar entry.
+- Implemented Push, Twirl Left, Twirl Right, Pinch, Expand, Crystals, Edge and Reconstruct, plus Size, Pressure, Distortion, Momentum, Adjust/Amount, Reset, Apply and Cancel. Supported pen barrel rotation controls Twirl.
+- Added reusable GPU deformation buffers and WGSL shaders for every mode, a background job pipeline and multicore CPU field composition/material resampling with automatic CPU fallback.
+- Added adaptive anisotropic antialiasing for compressed material, preserving perpendicular detail and exact unchanged pixels; corrected linear sampling in headless previews.
+- Kept changes local to the active layer and selection; page expansion, exact cancellation, undo/redo, and layered Graphite/PSD round trips remain supported.
+- Verified all shader modes on AMD Vulkan and DirectX 12 adapters, with maximum CPU/GPU coordinate disagreement below 0.001 pixel. Added mode, reconstruction, pressure, distortion, worker, momentum, Amount/Reset, toolbar-drag and full-interface regression coverage.
+
+## v0.24.13
+
+- Removed pencil hold-to-straighten entirely. Pausing preserves the freehand curve, including when loading older pencil settings that enabled the former behavior.
+- Drawing and transforms now extend past all four page edges. The working canvas grows losslessly around the original page, retaining material, individual layers, selections, editable paths and undo/redo.
+- Removed edge input rejection and coordinate clamping. Workspace growth compensates the view position, so the original page and the document point beneath the pointer stay stationary, including rotated and zoomed views.
+- PNG, JPEG and BMP exports include the entire expanded working area and outside artwork. Editable Graphite and PSD files also preserve the original page bounds.
+- Removed remaining 256-layer copy and four-million-pixel selection-transform restrictions.
+- Added headless pointer, interface, layer-history, outside-object transform, native/PSD round-trip and image-export regressions.
 
 ## v0.24.12
 

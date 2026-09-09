@@ -20,7 +20,6 @@ pub struct PencilControls {
     pub flow: f32,
     pub mouse_pressure: f32,
     pub pressure_feel: f32,
-    pub hold_to_straighten: bool,
     pub tilt: f32,
     pub azimuth: f32,
     pub auto_azimuth: bool,
@@ -40,7 +39,6 @@ impl PencilControls {
             flow: s.flow,
             mouse_pressure: s.mouse_pressure,
             pressure_feel: s.pen_pressure_gamma,
-            hold_to_straighten: s.hold_to_straighten,
             tilt: s.tilt_deg,
             azimuth: s.azimuth_deg,
             auto_azimuth: s.auto_azimuth,
@@ -59,7 +57,6 @@ impl PencilControls {
         s.flow = self.flow;
         s.mouse_pressure = self.mouse_pressure;
         s.pen_pressure_gamma = self.pressure_feel;
-        s.hold_to_straighten = self.hold_to_straighten;
         s.tilt_deg = self.tilt;
         s.azimuth_deg = self.azimuth;
         s.auto_azimuth = self.auto_azimuth;
@@ -142,7 +139,6 @@ mod tests {
         source.flow = 1.4;
         source.mouse_pressure = 0.7;
         source.pen_pressure_gamma = 1.3;
-        source.hold_to_straighten = false;
         source.tilt_deg = 60.;
         source.azimuth_deg = 120.;
         source.auto_azimuth = false;

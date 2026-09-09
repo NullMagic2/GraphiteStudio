@@ -6,6 +6,8 @@ pub mod history;
 mod layer_merge;
 mod layer_copy;
 pub mod material;
+pub mod liquify;
+pub mod liquify_gpu;
 pub mod orientation;
 pub mod paper;
 pub mod pencil;

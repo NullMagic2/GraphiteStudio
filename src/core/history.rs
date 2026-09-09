@@ -21,6 +21,15 @@ pub struct EditTransaction {
 }
 
 impl EditTransaction {
+    pub fn expand(&mut self, map:&mut super::orientation::QuarterTurn) {
+        let (w,h)=map.size();
+        if !self.remembered.is_empty(){self.remembered=vec![0;(w*h).div_ceil(64)];}
+        for (index,_) in &mut self.before {
+            *index=map.index(*index);
+            self.remembered[*index/64]|=1u64<<(*index%64);
+        }
+        self.vectors_before=self.vectors_before.as_ref().map(|v|map.layer(v));
+    }
     #[inline]
     pub fn remember(&mut self, index: usize, document: &Document) {
         debug_assert!(self.layer_id.is_none_or(|id| id == document.active_layer_id()));
@@ -155,6 +164,16 @@ impl Default for History {
 }
 
 impl History {
+    pub fn expand_document(&mut self, doc:&mut Document,map:&mut super::orientation::QuarterTurn) {
+        for entry in self.undo.iter_mut().chain(&mut self.redo) {
+            if let Some(copy)=&mut entry.copy {copy.rotate(map);}
+            if let Some(merge)=&mut entry.merge {merge.rotate(map);}
+            for change in &mut entry.changes {change.index=map.index(change.index);}
+            entry.vectors_before=map.layer(&entry.vectors_before);
+            entry.vectors_after=map.layer(&entry.vectors_after);
+        }
+        map.document(doc);
+    }
     fn rotate_state(&mut self, doc: &mut Document, clockwise: bool) {
         self.reorient_state(doc,super::orientation::QuarterTurn::new(doc.spec.width_px,doc.spec.height_px,clockwise));
     }

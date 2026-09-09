@@ -4,14 +4,16 @@
 
 Graphite Studio models how a pencil contacts paper, deposits pigment, wears down and blends with existing marks. Pressure and tilt shape the stroke; paper tooth and the contacting pencil surface create its texture. Choose graphite tones or your own colors, then work with layers and editable stroke paths.
 
-**Current version: v0.24.12** · [Release history](RELEASE_HISTORY.md) · [MIT license](LICENSE)
+**Current version: v0.24.15** · [Release history](RELEASE_HISTORY.md) · [MIT license](LICENSE)
 
 ## Features
 
-- **Expressive pencils:** pressure-sensitive width and tone, tilt shading, adjustable sharpness, gradual tip wear, line smoothing and hold-to-straighten. Core diameter reaches 200 px.
+- **Expressive pencils:** pressure-sensitive width and tone, tilt shading, adjustable sharpness, gradual tip wear, line smoothing. Holding the pencil still preserves the freehand stroke. Core diameter reaches 200 px.
 - **Custom pencil gallery:** import sampled ABR tips, organize folder collections and save independent settings for each pencil. Imported shapes use the graphite material renderer and live in separate detected files in `imported_brushes`.
+- **Liquify:** Push, Twirl Left/Right, Pinch, Expand, Crystals, Edge and Reconstruct. Size, pressure, distortion, momentum, Adjust/Amount and Reset controls; GPU deformation shaders and background multicore processing.
 - **Drawing tools:** Pencil, Smudge, Tissue, vinyl and kneaded erasers with diameters up to 200 px, textured geometric shapes, free selection and individual stroke selection.
 - **Editable artwork:** move, resize and rotate retained stroke paths; confirm or cancel transforms and undo changes. Layers support drag ordering, visibility, opacity, Merge down and blend modes, with Multiply as the default.
+- **Beyond the page:** strokes and moved objects can extend past every page edge. The working area expands without clamping the pointer or shifting the page. The original page outline stays visible, layers and undo remain intact, and PNG/JPEG/BMP exports include the entire expanded artwork area. Editable Graphite/PSD saves also retain the original page bounds.
 - **Flexible workspace:** multiple drawing tabs, resizable and collapsible panels, custom paper dimensions, DPI, textures and color, portrait/landscape orientation, fit-to-screen and fullscreen drawing.
 - **Pen and touch:** selectable Windows Ink and Wintab input, pressure calibration, and canvas pinch, pan and rotation when the device or bridge forwards those gestures.
 - **GPU acceleration:** Vulkan or DirectX 12 compute for eligible pencil and eraser strokes, with bounded buffers and CPU fallback. The display preserves texture with antialiasing and linear-light downsampling.
@@ -102,6 +104,8 @@ Tissue supports sizes up to **200 px** and a **Random graphite** control for var
 
 Pencil **Opacity** (0–100%) replaces Material flow. It controls pigment transfer while retaining pressure, tip shape and paper grain; 0% makes no mark or paper deformation. New default pencils transfer 15% more pigment than before, producing approximately 15% darker light strokes. Existing saved pencil settings and stroke replay values are retained. Opacity is saved per pencil in `pencil.settings` using its compatible internal `flow` value. Pressure feel calibrates the pen's force curve, while Width response controls thin-to-thick variation; these controls serve different purposes.
 
+Drag the dotted handle to reposition the fullscreen toolbar. Its position stays in place when leaving and reentering fullscreen during the session, and is kept within the visible drawing area.
+
 The fullscreen toolbar gives quick access to Pencil, Eraser, Transform, Tissue and Smudge with 48 px touch targets. It is visible only in fullscreen and remains accessible when zoom leaves no free margin. Use its small arrow to hide or reopen it, and the separate **×** button at the top right to leave fullscreen. Its **Size** button opens the same slider without a keyboard. Press Shift for size in either display mode, then release it and adjust the slider. The compact popup contains only the slider and size value. Click outside or press Escape to close it; a dismissal click on the paper does not draw. It adjusts pencil, eraser, smudge and tissue sizes in pixels, or scales an idle transform proportionally in percent. Text entry, active drawing/transform drags, shape snapping and paper rotation take priority over opening the size popup.
 
 **Options → Keyboard shortcuts…** lets you record new key combinations, clear assignments and restore defaults. Duplicate assignments are rejected with the conflicting command's name. Click **Save shortcuts** to apply and persist changes in `shortcuts.settings` beside the executable; Cancel leaves current shortcuts intact. The dialog also lets you choose Shift, Ctrl, Alt or Disabled for the held size control. Keyboard commands include tools, selection, saving, Undo/Redo, drawing zoom, panning and window recovery; Fit to screen and Toggle fullscreen can also be assigned. Mouse/touch gestures and Shift snapping are unchanged. The table above lists the defaults.
@@ -136,13 +140,27 @@ The GPU check requires a compatible hardware adapter. It exercises material rend
 
 The v0.24.5 regression suite passed **202 tests**. Hardware rendering checks covered Vulkan and DirectX 12 on Radeon hardware in v0.24.2; Intel hardware was not available for direct testing. See the [release measurements](RELEASE_HISTORY.md#v0236) for workloads and timing limits.
 
+## Liquify
+
+Choose the turquoise swirl directly below Transform, in the regular palette or fullscreen toolbar. The material sidebar also has a Liquify button below Transform. The controls window can be moved by its title bar.
+
+The eight choices are **Push**, **Twirl Left**, **Twirl Right**, **Pinch**, **Expand**, **Crystals**, **Edge**, and **Reconstruct**. Push follows the stroke; the Twirl modes rotate material; Pinch and Expand contract or inflate it; Crystals form uneven shards; Edge folds toward the stroke's line. Reconstruct locally restores the state from when Liquify was opened.
+
+**Size** sets the affected diameter. **Pressure** sets maximum strength and responds to real pen pressure; mouse/finger input uses the slider's full strength. **Distortion** adds irregular motion. **Momentum** continues the effect after lifting the pen, then decays. Twirl also responds to barrel rotation when reported by the device. **Adjust > Amount** reduces the whole session's deformation, and **Reset** restores the session's starting artwork without leaving Liquify. **Apply/Enter** keeps it; **Cancel/Escape** restores it.
+
+Liquify changes active-layer pixel material, respects a free selection and works beyond the page. Other layers stay separate. Applying bakes that layer's retained paths into pixel material; Undo restores its exact original pixels and paths. Editable Graphite and PSD saves retain the resulting material and layers.
+
+All mode mappings run through a reusable WGSL compute pipeline on supported Vulkan/DirectX 12 devices. Queued deformation steps share one antialiased image resampling pass. Large brushes publish smaller batches for earlier feedback; redundant straight Push samples are combined without merging corners or pressure changes. Stationary Push does no unnecessary work. Momentum uses continuous decay and loses its throw when the pen pauses before lifting. Jobs and GPU readback run off the interface thread; deformation-field composition, original-material sampling and Amount changes use multiple CPU workers. Small jobs, disabled acceleration and unsupported/failed GPU work use the CPU fallback. Adaptive footprint filtering smooths compressed detail along its principal directions without applying a global blur. Sampling the original material through a deformation field avoids repeated image-blurring passes. Explicit save or layer/tool changes finish pending jobs before switching their document.
+
+Behavior reference: [Procreate's official Liquify handbook](https://help.procreate.com/procreate/handbook/adjustments/adjustments-liquify). This is Graphite's own implementation of the documented effects, not Procreate's proprietary rendering engine.
+
 ## Compatibility and scope
 
 - Wacom, XP-Pen and Apple Pencil through EasyCanvas depend on the installed driver or bridge. Tilt and barrel rotation are used only when the hardware and input backend expose them.
 - ABR import reads supported sampled-tip data, not Photoshop's complete brush dynamics or procedural brush engine. Third-party brush packs are not bundled.
-- Editable paths regenerate textured material on a finite pixel canvas. Imported tips retain their sampled resolution; this is not a pure vector/SVG editor.
+- Editable paths regenerate textured material on an expandable pixel canvas. Imported tips retain their sampled resolution; this is not a pure vector/SVG editor.
 - The material model is an artistic, physically inspired approximation. Grade recipes and wear rates are not measured specifications for a particular pencil manufacturer.
-- Large documents and brushes require more memory and processing. Documents are limited to 16 megapixels; GPU acceleration falls back to CPU when unavailable or outside its working-memory budget.
+- Large documents and brushes require more memory and processing. There is no fixed document-pixel quota; GPU acceleration falls back to CPU when unavailable or outside its working-memory budget.
 
 ## Documentation and contributing
 

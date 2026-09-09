@@ -35,6 +35,17 @@ fn corners(r: Rect) -> [Pos2; 4] {
     ]
 }
 impl GraphiteApp {
+    pub(super) fn translate_edit_workspace(&mut self,map:&mut crate::core::orientation::QuarterTurn,delta:Vec2) {
+        if let Some(p)=&mut self.editing.vector_pick {*p+=delta;}
+        if let Some(points)=&mut self.editing.lasso {for p in points {*p+=delta;}}
+        if let Some(t)=&mut self.editing.transform {
+            t.cutout.bounds=t.cutout.bounds.translate(delta);
+            t.target=t.target.translate(delta);t.affected=t.affected.translate(delta);
+            if let Some((_,start,original))=&mut t.drag {*start+=delta;*original=original.translate(delta);}
+            if let Some((original,_))=&mut t.vectors {*original=map.layer(original);}
+            t.tx.expand(map);
+        }
+    }
     pub(super) fn transform_dragging(&self)->bool {self.editing.transform.as_ref().is_some_and(|t|t.drag.is_some() || t.rotation_drag.is_some())}
     pub(super) fn mirror_selection_or_document(&mut self,ctx:&egui::Context,horizontal:bool) {
         self.finish_stroke();
@@ -65,6 +76,7 @@ impl GraphiteApp {
     }
 
     pub(super) fn select_tool(&mut self, tool: ToolKind) {
+        self.finish_liquify(true);
         self.quick_controls.close_size();
         self.finish_stroke();
         self.cancel_transform_for_tool_change();
@@ -177,7 +189,7 @@ impl GraphiteApp {
         if input.primary_pressed
             && input
                 .position
-                .is_some_and(|p| self.viewport.contains(canvas, p))
+                .is_some_and(|p| ui.clip_rect().contains(p))
         {
             let point = pos.unwrap();
             if let Some(t) = &self.editing.transform {
@@ -228,6 +240,7 @@ impl GraphiteApp {
         }
     }
     pub(super) fn begin_transform(&mut self, ctx: &egui::Context) {
+        self.finish_liquify(true);
         if self.editing.transform.is_some() {
             return;
         }
@@ -285,9 +298,6 @@ impl GraphiteApp {
                 bounds.min = Pos2::new(bounds.min.x.floor(), bounds.min.y.floor());
                 bounds.max = Pos2::new(bounds.max.x.ceil(), bounds.max.y.ceil());
                 let (width, height) = (bounds.width() as usize, bounds.height() as usize);
-                if width * height > 4_000_000 {
-                    return None;
-                }
                 Some(Cutout {
                     bounds,
                     width,
@@ -382,6 +392,19 @@ impl GraphiteApp {
         }
     }
     pub(super) fn apply_transform(&mut self) {
+        if let Some(t)=&self.editing.transform {
+            let mut bounds=Rect::NOTHING;
+            for p in corners(t.target) {bounds.extend_with(vector::rotate(p,t.target.center(),t.angle));}
+            if let Some((original,selected))=&t.vectors {
+                let mut tips=std::collections::HashMap::new();
+                for &index in selected {
+                    let mut stroke=original.strokes[index].transformed(t.cutout.bounds,t.target);
+                    for (axis,flip) in t.flip.iter().enumerate(){if *flip{stroke=stroke.mirrored(t.target.center(),axis==0,&mut tips);}}
+                    bounds=bounds.union(stroke.rotated(t.target.center(),t.angle).bounds(self.document.spec.dpi));
+                }
+            }
+            self.grow_workspace(bounds.expand(4.));
+        }
         let Some(mut t) = self.editing.transform.take() else {
             self.clear_edit_selection();
             return;
@@ -450,7 +473,7 @@ impl GraphiteApp {
                 t.target.center(),
                 t.angle,
             );
-            if input.primary_pressed && self.viewport.contains(canvas, screen) {
+            if input.primary_pressed && ui.clip_rect().contains(screen) {
                 if t.rotate_mode || knob.distance(pos) * self.viewport.zoom < 10. {
                     let delta = pos - t.target.center();
                     if delta.length() > 1. {
@@ -510,14 +533,8 @@ impl GraphiteApp {
                 t.rotation_drag = None;
             }
         } else if self.settings.tool == ToolKind::Lasso {
-            let point = pos.to_vec2().clamp(
-                Vec2::ZERO,
-                Vec2::new(
-                    self.document.spec.width_px as f32,
-                    self.document.spec.height_px as f32,
-                ),
-            );
-            if input.primary_pressed && self.viewport.contains(canvas, screen) {
+            let point = pos.to_vec2();
+            if input.primary_pressed && ui.clip_rect().contains(screen) {
                 self.editing.selected_path = None;
                 self.editing.lasso = Some(vec![point]);
             }
@@ -748,7 +765,7 @@ impl GraphiteApp {
           egui::Window::new("Tool guide").fade_in(false).fade_out(false).default_pos(Pos2::new(90.,90.)).open(&mut self.editing.guide).default_width(440.).show(ctx,|ui|{
               ui.small("This guide lists default keys. Your current assignments are in Options → Keyboard shortcuts.");
             for (name,help) in [
-                ("Pencil","Draw graphite with pressure and tilt. Hold the tip still for about 0.65 seconds to straighten the stroke, adjust its endpoint, then lift. Disable Hold to straighten in Pencil controls if preferred. Line smoothing reduces wobble; 0% switches it off."),
+                ("Pencil","Draw graphite with pressure and tilt. Line smoothing reduces wobble; 0% switches it off."),
                 ("Pencil gallery / ABR","Open Pencil gallery to import ABR tips, save current pencil settings, and organize named pencils in folders. Imported samples become graphite contact relief with the pencil's pressure, tilt and paper response. Photoshop stamp dynamics and computed brushes are not imported."),
                 ("Tissue","A preloaded tissue lays down a broad, soft graphite stain. Lower Graphite load for gentle shading; repeated passes deepen it. Random graphite varies density in soft patches while keeping the chosen color."),
                 ("Smudge / Eraser","Smudge moves existing graphite. Eraser lift 100% fully clears the contacted material on the active layer."),
@@ -767,6 +784,42 @@ impl GraphiteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pixel_and_vector_objects_move_fully_outside_page_and_remain_editable() {
+        for pixels in [false,true] {
+            let mut a=app();let ctx=egui::Context::default();
+            draw(&mut a,&ctx,Pos2::new(80.,90.),Pos2::new(140.,105.));
+            let original=a.document.clone();
+            if pixels {a.document.selection.set(vec![Vec2::new(60.,70.),Vec2::new(160.,70.),Vec2::new(160.,125.),Vec2::new(60.,125.)],236,236);}
+            a.begin_transform(&ctx);
+            assert_eq!(a.editing.transform.as_ref().unwrap().vectors.is_none(),pixels);
+            a.editing.transform.as_mut().unwrap().target=a.editing.transform.as_ref().unwrap().target.translate(Vec2::new(-300.,-200.));
+            a.apply_transform();
+            let [px,py,pw,ph]=a.document.page_bounds();
+            assert_eq!([pw,ph],[236,236]);
+            let mass:f32=a.document.surface.graphite_mass.iter().sum();assert!(mass>0.);
+            for y in py..py+ph {for x in px..px+pw {assert_eq!(a.document.surface.graphite_mass[a.document.index(x,y)],0.);}}
+            let moved=a.document.surface.graphite_mass.clone();
+            a.begin_transform(&ctx);
+            assert!(a.editing.transform.is_some(),"Outside object cannot be selected again");
+            a.cancel_transform();
+            assert!(a.document.surface.graphite_mass==moved);
+            assert!(a.history.undo(&mut a.document));
+            for y in 0..236 {for x in 0..236 {
+                assert_eq!(a.document.surface.graphite_mass[a.document.index(x+px,y+py)],original.surface.graphite_mass[original.index(x,y)]);
+            }}
+            assert!(a.history.redo(&mut a.document));assert!(a.document.surface.graphite_mass==moved);
+            for ext in ["graphite","psd"] {
+                let path=std::env::temp_dir().join(format!("graphite-moved-{}-{pixels}.{ext}",std::process::id()));
+                a.save_project_path(&path).unwrap();
+                let p=graphite_studio::project::load(&path).unwrap();
+                assert_eq!(p.document.page,a.document.page);
+                assert!(p.document.surface.graphite_mass==moved);
+                assert_eq!(p.document.layers[0].vectors.strokes.is_empty(),pixels);
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
     #[test]
     fn mirror_buttons_are_only_shown_with_transform_controls() {
         let mut a=app();let ctx=egui::Context::default();
@@ -806,6 +859,8 @@ mod tests {
         assert_eq!(a.document.layers[1].blend_mode,a.document.layers[0].blend_mode);
         assert!(Arc::ptr_eq(&a.document.layers[1].vectors,&original));
         assert_eq!(a.document.surface.graphite_mass,material);
+        // The interface fitted the view; this fixture supplies pixel coordinates directly.
+        a.viewport.zoom=1.;
         draw(&mut a,&ctx,Pos2::new(35.,80.),Pos2::new(85.,95.));
         assert_eq!(a.document.layers[0].vectors.strokes.len(),1);
         assert_eq!(a.document.layers[1].vectors.strokes.len(),2);
@@ -1494,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn rotated_canvas_draws_at_document_coordinates_and_rejects_outside_paper() {
+    fn rotated_canvas_draws_at_document_coordinates_including_outside_paper() {
         let mut a = app();
         a.viewport.rotation = 0.73;
         a.viewport.zoom = 1.;
@@ -1508,10 +1563,10 @@ mod tests {
         let record = &a.document.layers[0].vectors.strokes[0];
         assert!((Vec2::new(record.points[0].x, record.points[0].y) - first).length() < 0.001);
         assert!((Vec2::new(record.points[1].x, record.points[1].y) - end).length() < 0.001);
-        let before = a.document.surface.graphite_mass.clone();
         // Bounding rectangle corner is outside the rotated sheet.
         draw(&mut a, &ctx, Pos2::new(1., 1.), Pos2::new(2., 2.));
-        assert_eq!(before, a.document.surface.graphite_mass);
+        assert_eq!(a.document.layers[0].vectors.strokes.len(),2);
+        assert!(a.document.page.is_some());
         a.settings.tool = ToolKind::Pencil;
         let point = a.make_stroke_point(
             first_screen,
@@ -2128,8 +2183,8 @@ mod previews {
         image::save_buffer(
             "../../tools-v18.png",
             &rgba,
-            600,
-            600,
+            app.document.spec.width_px as u32,
+            app.document.spec.height_px as u32,
             image::ColorType::Rgba8,
         )
         .unwrap();

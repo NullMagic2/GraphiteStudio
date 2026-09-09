@@ -177,8 +177,6 @@ pub fn show_tool_panel(
                 settings.line_smoothing = smoothing / 100.;
             }
             ui.small("0%: no added stabilization. Higher values reduce wobble with more pen lag.");
-            ui.checkbox(&mut settings.hold_to_straighten, "Hold to straighten")
-                .on_hover_text("Draw with Pencil, then keep the tip still for about two-thirds of a second without lifting. Move to adjust the straight line, then lift to place it. No keyboard needed.");
             egui::ComboBox::from_label("Grade")
                 .selected_text(settings.grade.label())
                 .show_ui(ui, |ui| {

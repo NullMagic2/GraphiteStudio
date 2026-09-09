@@ -2,6 +2,22 @@
 use crate::core::pencil::ToolKind;
 use eframe::egui::{self, Color32, Pos2, Rect, Shape, Stroke};
 
+/// A flowing turquoise droplet with a bright spiral; vector artwork at every scale.
+pub fn liquify_button(ui:&mut egui::Ui,selected:bool,size:f32)->egui::Response {
+    let (rect,response)=ui.allocate_exact_size(egui::Vec2::splat(size),egui::Sense::click());
+    let visuals=ui.style().interact_selectable(&response,selected);
+    ui.painter().rect(rect.shrink(1.),5.,visuals.bg_fill,visuals.bg_stroke,egui::StrokeKind::Inside);
+    let center=rect.center()+egui::vec2(0.,size*0.06);let radius=size*0.29;
+    let drop:Vec<_>=(0..64).map(|i| {let t=i as f32/64.*std::f32::consts::TAU;
+        center+egui::vec2(t.sin()*radius*(0.78+0.22*t.cos()),t.cos()*radius-(-t.cos()).max(0.).powi(6)*radius*0.4)}).collect();
+    ui.painter().add(Shape::convex_polygon(drop,Color32::from_rgb(41,162,183),Stroke::new(1.,Color32::from_rgb(24,110,145))));
+    let spiral:Vec<_>=(0..65).map(|i|{let t=i as f32/64.;let angle=t*std::f32::consts::TAU*1.45-1.;center+egui::vec2(angle.cos(),angle.sin())*radius*(0.7*(1.-t)+0.03)}).collect();
+    ui.painter().add(Shape::line(spiral,Stroke::new((size*0.045).max(1.3),Color32::from_rgb(221,255,250))));
+    response.widget_info(||egui::WidgetInfo::selected(egui::WidgetType::Button,ui.is_enabled(),selected,"Liquify"));
+    #[cfg(test)] ui.data_mut(|d|d.insert_temp(egui::Id::new(("liquify_icon",size as u32)),rect));
+    response.on_hover_text("Liquify · Push, twist, pinch and reshape artwork")
+}
+
 /// Large pen/touch targets with vector symbols that do not depend on font glyphs.
 pub fn transform_action_button(ui: &mut egui::Ui, confirm: bool) -> egui::Response {
     let label = if confirm { "Confirm" } else { "Cancel" };

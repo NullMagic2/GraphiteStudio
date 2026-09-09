@@ -3,10 +3,15 @@ use eframe::egui::{
     TextureWrapMode, Vec2,
 };
 mod editing;
+mod workspace;
+mod liquify;
+#[cfg(test)]
+mod workspace_tests;
 mod options;
 mod projects;
 mod opening;
-mod quick_line;
+#[cfg(test)]
+mod pencil_hold_tests;
 mod quick_controls;
 mod gallery;
 mod paper_settings;
@@ -50,7 +55,6 @@ const CPU_FALLBACK_TEXTURE_OPTIONS: TextureOptions = TextureOptions {
 };
 
 struct StrokeSession {
-    quick_line: quick_line::QuickLine,
     settings: ToolSettings,
     selection: crate::core::selection::Selection,
     points: Vec<StrokePoint>,
@@ -91,6 +95,9 @@ struct DrawingTab {
 }
 
 pub struct GraphiteApp {
+    workspace_canvas: Option<Rect>,
+    liquify: liquify::LiquifyUi,
+    workspace_view_size: Vec2,
     fullscreen: bool,
     fullscreen_applied: bool,
     fullscreen_size: Option<Vec2>,
@@ -230,13 +237,6 @@ impl GraphiteApp {
         }
         if let Some(pos) = input.position {
             let p = self.viewport.screen_to_document(canvas, pos);
-            let p = p.clamp(
-                Vec2::ZERO,
-                Vec2::new(
-                    self.document.spec.width_px as f32,
-                    self.document.spec.height_px as f32,
-                ),
-            );
             let point = StrokePoint {
                 x: p.x,
                 y: p.y,
@@ -248,7 +248,7 @@ impl GraphiteApp {
                     .unwrap_or(self.settings.azimuth_deg),
                 rotation_deg: input.rotation_deg,
             };
-            if input.primary_pressed && self.viewport.contains(canvas, pos) {
+            if input.primary_pressed && ui.clip_rect().contains(pos) {
                 self.shape_drag = Some((point, point));
             } else if let Some((start, end)) = &mut self.shape_drag {
                 if input.primary_down || input.primary_released {
@@ -266,7 +266,7 @@ impl GraphiteApp {
                 if start.pressure <= 1.0e-4 {
                     start.pressure = self.settings.mouse_pressure;
                 }
-                let points = self
+                let mut points = self
                     .settings
                     .shape
                     .points_with_snap(Vec2::new(start.x, start.y), Vec2::new(end.x, end.y), self.settings.snap_shape(ui.input(|i| i.modifiers.shift)));
@@ -286,6 +286,12 @@ impl GraphiteApp {
                 );
                 settings.pencil_geometry_scale =
                     settings.shape_width_px / (2. * contact.cross_radius_px);
+                let extent=(contact.rear_extension_px+contact.cross_radius_px+contact.point_radius_px)
+                    *settings.pencil_geometry_scale+4.;
+                let mut bounds=Rect::NOTHING;
+                for p in &points {bounds.extend_with(p.to_pos2());}
+                let shift=self.grow_workspace(bounds.expand(extent));
+                for p in &mut points {*p+=shift;}
                 self.prepare_vector_base();
                 let record = crate::core::vector::VectorStroke {
                     shape: None,
@@ -422,6 +428,9 @@ impl GraphiteApp {
             next_tab_id: 2,
             close_tab_request: None,
             material_panel_visible: true,
+            workspace_canvas: None,
+            liquify: Default::default(),
+            workspace_view_size: Vec2::new(1000.,800.),
             fullscreen: false,
             fullscreen_applied: false,
             fullscreen_size: None,
@@ -456,7 +465,7 @@ impl GraphiteApp {
             layers_panel_width: 250.,
             fit_requested: true,
             sidebar_statistics: (0, 0.0, 0.0),
-            status: "Ready. Graphite Studio v0.24.12".to_owned(),
+            status: "Ready. Graphite Studio v0.24.15".to_owned(),
         }
     }
 
@@ -614,6 +623,7 @@ impl GraphiteApp {
         if index == self.active_tab || index >= self.tabs.len() {
             return;
         }
+        self.finish_liquify(true);
         self.finish_stroke();
         self.cancel_transform();
         self.editing.lasso = None;
@@ -645,6 +655,7 @@ impl GraphiteApp {
         self.tabs[self.active_tab].stored = Some(state);
         self.active_tab = index;
         self.pressure_input = PressureInputState::default();
+        self.workspace_canvas=None;
         self.renderer.reset();
         self.prepared_preview = None;
         self.display_pyramid = None;
@@ -876,6 +887,7 @@ impl GraphiteApp {
     }
 
     fn handle_topbar_action(&mut self, action: TopbarAction) {
+        if !matches!(action,TopbarAction::None|TopbarAction::Fit|TopbarAction::Fullscreen){self.finish_liquify(true);}
         if let TopbarAction::RecentFilesMaximum(maximum)=action {self.set_recent_files_maximum(maximum);return;}
         if action == TopbarAction::Shortcuts {self.open_shortcuts();return;}
         if action == TopbarAction::PencilGallery {self.open_pencil_gallery();return;}
@@ -1000,6 +1012,7 @@ impl GraphiteApp {
         if action == LayerPanelAction::None {
             return;
         }
+        self.finish_liquify(true);
         self.cancel_transform();
         self.shape_drag = None;
         self.editing.lasso = None;
@@ -1111,6 +1124,10 @@ impl GraphiteApp {
 
     fn handle_keyboard_shortcuts(&mut self, ui: &mut egui::Ui) {
         if self.shortcuts.open {return;}
+        if self.liquify.session.is_some() && !ui.ctx().text_edit_focused() {
+            if ui.input_mut(|i|i.consume_key(egui::Modifiers::NONE,egui::Key::Escape)){self.liquify_request_finish(false);return;}
+            if ui.input_mut(|i|i.consume_key(egui::Modifiers::NONE,egui::Key::Enter)){self.liquify_request_finish(true);return;}
+        }
         // Esc must always leave fullscreen, even if a field or transform had focus.
         if self.fullscreen
             && ui.input_mut(|i| self.shortcuts.bindings.consume(i,Command::Cancel))
@@ -1226,6 +1243,7 @@ impl GraphiteApp {
 
     fn draw_canvas(&mut self, ui: &mut egui::Ui) {
         let raw_available = ui.available_size();
+        self.workspace_view_size=ui.clip_rect().size();
         let available = Vec2::new(raw_available.x.max(120.0), raw_available.y.max(120.0));
         if self.fullscreen && self.fullscreen_size != Some(available) {
             self.fullscreen_size = Some(available);
@@ -1260,6 +1278,7 @@ impl GraphiteApp {
         area.show_viewport(ui, |ui, scroll_viewport| {
             let view_rect = ui.clip_rect();
             let view_size = scroll_viewport.size();
+            self.workspace_view_size = view_size;
             if self.opening.is_none() && self.open_error.is_none() && !self.shortcuts.open && !self.gallery.open && !self.paper_settings.open && !self.save_as_open
                 && !ui.ctx().text_edit_focused() {
                 let steps=ui.input_mut(|input| {
@@ -1393,12 +1412,12 @@ impl GraphiteApp {
                 // Right drag, middle drag and Space+left drag all move the sheet. Native scrolling
                 // owns overflowing axes; free_pan lets a fitted/small sheet still be repositioned.
                 let scroll_motion = Vec2::new(
-                    if layout.overflow[0] {
+                    if layout.overflow[0] && !self.viewport.unbounded {
                         input.delta.x
                     } else {
                         0.0
                     },
-                    if layout.overflow[1] {
+                    if layout.overflow[1] && !self.viewport.unbounded {
                         input.delta.y
                     } else {
                         0.0
@@ -1415,10 +1434,11 @@ impl GraphiteApp {
             let painter = ui.painter_at(content_rect);
             painter.rect_filled(content_rect, 0.0, Color32::from_gray(43));
 
-            let canvas_rect = Rect::from_center_size(
+            let mut canvas_rect = Rect::from_center_size(
                 content_rect.min + layout.sheet_min + layout.sheet_size * 0.5,
                 doc_size * self.viewport.zoom,
             );
+            self.workspace_canvas=Some(canvas_rect);
             #[cfg(test)]
             ui.data_mut(|d| d.insert_temp(egui::Id::new("test_paper_rect"), canvas_rect));
             let paper_corners = [
@@ -1430,11 +1450,13 @@ impl GraphiteApp {
             .map(|p| self.viewport.document_to_screen(canvas_rect, p));
             let native_owned = self.pressure_input.native_owns_pointer();
             let pen_frames = self.pressure_input.take_pen_frames();
+            let pen_had_frames=!pen_frames.is_empty();
             self.show_quick_controls(ui, Rect::from_points(&paper_corners), view_rect);
             let action_rect = self.show_transform_actions(ui, canvas_rect, view_rect);
             let actions_block_mouse = if !native_owned { self.transform_actions_block_input(action_rect, input) } else { false };
             let quick_block_mouse = if !native_owned {self.quick_controls.block_input(input)} else {false};
             if input.touch_navigation && !native_owned {
+                self.pause_liquify();
                 self.shape_drag = None;
                 self.editing.lasso = None;
                 // A first finger can arrive a frame before the second. Restore its provisional
@@ -1450,20 +1472,26 @@ impl GraphiteApp {
                 for frame in pen_frames {
                     let quick_block=self.quick_controls.block_input(frame);
                     if !self.transform_actions_block_input(action_rect, frame) && !quick_block {
-                        self.handle_drawing_input(ui, canvas_rect, frame);
-                    }
+                        self.handle_drawing_input(ui, self.workspace_canvas.unwrap_or(canvas_rect), frame);
+                    }else{self.pause_liquify();}
                 }
             } else if !actions_block_mouse && !quick_block_mouse {
                 self.handle_drawing_input(ui, canvas_rect, input);
-            }
-            // Native pens may send no packets while held still. Check the hold
-            // timer on repaint as well as on incoming pointer events.
-            self.tick_quick_line(ui);
+            }else{self.pause_liquify();}
+            if native_owned&&!pen_had_frames&&self.liquify.session.is_some(){self.liquify_input(ui,canvas_rect,PointerFrame::default());}
+            canvas_rect=self.workspace_canvas.unwrap_or(canvas_rect);
+            let size=Vec2::new(self.document.spec.width_px as f32,self.document.spec.height_px as f32);
+            let artwork_corners=[Vec2::ZERO,Vec2::new(size.x,0.),size,Vec2::new(0.,size.y)]
+                .map(|p|self.viewport.document_to_screen(canvas_rect,p));
+            let [x,y,w,h]=self.document.page_bounds();
+            let paper_corners=[Vec2::new(x as f32,y as f32),Vec2::new((x+w) as f32,y as f32),
+                Vec2::new((x+w) as f32,(y+h) as f32),Vec2::new(x as f32,(y+h) as f32)]
+                .map(|p|self.viewport.document_to_screen(canvas_rect,p));
             // Shade once, after all queued pen packets, before this frame samples the canvas.
             self.ensure_texture(ui.ctx());
             if let Some(texture_id) = self.document_texture_id() {
                 let mut mesh = egui::Mesh::with_texture(texture_id);
-                for (pos, uv) in paper_corners.into_iter().zip([
+                for (pos, uv) in artwork_corners.into_iter().zip([
                     Pos2::ZERO,
                     Pos2::new(1., 0.),
                     Pos2::new(1., 1.),
@@ -1520,8 +1548,18 @@ impl GraphiteApp {
     }
 
     fn handle_drawing_input(&mut self, ui: &mut egui::Ui, canvas_rect: Rect, input: PointerFrame) {
-        if self.shortcuts.open || self.gallery.open || self.paper_settings.open || self.save_as_open { return; }
-        if self.move_quick_line(ui, canvas_rect, input) { return; }
+        if self.opening.is_some() || self.open_error.is_some() || self.shortcuts.open || self.gallery.open || self.paper_settings.open || self.save_as_open { return; }
+        if self.liquify.session.is_some(){self.liquify_input(ui,canvas_rect,input);return;}
+        let mut canvas_rect=canvas_rect;
+        self.workspace_canvas=Some(canvas_rect);
+        if self.editing.transform.is_none() && !matches!(self.settings.tool,ToolKind::Lasso|ToolKind::VectorSelect)
+            && !input.wants_pan() && !input.touch_navigation && (input.primary_pressed || ((self.stroke_session.is_some() || self.shape_drag.is_some()) && (input.primary_down || input.primary_released))) {
+            if let Some(pos)=input.position.filter(|p|ui.clip_rect().contains(*p)) {
+                let p=self.viewport.screen_to_document(canvas_rect,pos);
+                self.grow_workspace(Rect::from_center_size(p.to_pos2(),Vec2::ZERO).expand(self.brush_extent(input)));
+                canvas_rect=self.workspace_canvas.unwrap_or(canvas_rect);
+            }
+        }
         if self.editing.transform.is_some()
             || matches!(self.settings.tool, ToolKind::Lasso | ToolKind::VectorSelect)
         {
@@ -1539,11 +1577,11 @@ impl GraphiteApp {
             return;
         }
 
-        let pointer_inside_paper = input
+        let pointer_inside_workspace = input
             .position
-            .is_some_and(|p| self.viewport.contains(canvas_rect, p));
+            .is_some_and(|p| ui.clip_rect().contains(p));
 
-        if input.primary_pressed && pointer_inside_paper {
+        if input.primary_pressed && pointer_inside_workspace {
             if self.stroke_session.is_some() {
                 self.finish_stroke();
             }
@@ -1561,7 +1599,7 @@ impl GraphiteApp {
                 input.rotation_deg,
             );
             if self.settings.tool == ToolKind::Pencil {
-                self.stroke_engine.begin_pencil_stroke(point);
+                self.stroke_engine.begin_pencil_stroke(StrokePoint { x:point.x-self.document.page_origin().x,y:point.y-self.document.page_origin().y,..point });
             }
             let mut tx = EditTransaction::default();
             // Preserve measured contact force, including deliberate firm taps.
@@ -1576,7 +1614,6 @@ impl GraphiteApp {
                 self.document.mark_dirty(dirty);
             }
             self.stroke_session = Some(StrokeSession {
-                quick_line: quick_line::QuickLine::new(start_point, ui.input(|i| i.time)),
                 settings: self.settings.clone(),
                 selection: self.document.selection.clone(),
                 points: vec![start_point],
@@ -1598,7 +1635,7 @@ impl GraphiteApp {
                 device_orientation_used: input.orientation_from_device,
             });
             ui.ctx().request_repaint();
-        } else if input.primary_down && pointer_inside_paper {
+        } else if input.primary_down && pointer_inside_workspace {
             if let Some(screen_pos) = input.position {
                 let previous = self
                     .stroke_session
@@ -1615,7 +1652,6 @@ impl GraphiteApp {
                     input.rotation_deg,
                 );
                 if let Some(session) = &mut self.stroke_session {
-                    session.quick_line.observe(point, ui.input(|i| i.time), self.viewport.zoom);
                     let point = session.smoother.push(point);
                     // Midpoint quadratic interpolation turns the raw pointer polyline into a C1
                     // continuous path. Each raw sample is the control point between the midpoint
@@ -1644,7 +1680,6 @@ impl GraphiteApp {
         if input.primary_released {
             self.finish_stroke();
         }
-        self.tick_quick_line(ui);
     }
 
     fn finish_stroke(&mut self) {
@@ -1654,7 +1689,6 @@ impl GraphiteApp {
 
         // Flush only to the measured endpoint. Coalesced Windows Ink samples already
         // contain the pressure ramp; invented extensions cause hooks and overshoots.
-        if !session.quick_line.snapped() {
         self.stroke_engine.apply_quadratic_segment(
             &mut self.document,
             &self.settings,
@@ -1664,7 +1698,6 @@ impl GraphiteApp {
             session.last_raw,
             &mut session.transaction,
         );
-        }
 
         // Pencil wear is intentionally deferred until stroke end. The previous implementation
         // changed the contact footprint continuously during a long mouse drag, so a nominally
@@ -1678,12 +1711,12 @@ impl GraphiteApp {
         if !session.transaction.is_empty() {
             let record = crate::core::vector::VectorStroke {
                 shape: None,
-                label: if session.quick_line.snapped() { "Straight pencil line".into() } else { session.settings.tool.label().into() },
+                label: session.settings.tool.label().into(),
                 settings: session.settings,
                 tip: session.initial_tip,
                 engine: session.initial_engine,
                 points: session.points,
-                polyline: session.quick_line.snapped(),
+                polyline: false,
                 selection: session.selection,
             };
             let active = self.document.active_layer_index();
@@ -1780,7 +1813,7 @@ impl GraphiteApp {
         &self,
         painter: egui::Painter,
         view_rect: Rect,
-        canvas_rect: Rect,
+        _canvas_rect: Rect,
         pointer: Option<Pos2>,
         pressure: f32,
     ) {
@@ -1792,7 +1825,12 @@ impl GraphiteApp {
         let Some(pointer) = pointer else {
             return;
         };
-        if !view_rect.contains(pointer) || !self.viewport.contains(canvas_rect, pointer) {
+        if !view_rect.contains(pointer) {
+            return;
+        }
+        if self.liquify_controls_cover(pointer){return;}
+        if self.liquify.session.is_some() {
+            painter.circle_stroke(pointer,self.liquify.settings.size*self.viewport.zoom*0.5,Stroke::new(1.5,Color32::from_rgb(41,162,183)));
             return;
         }
 
@@ -1912,6 +1950,7 @@ impl GraphiteApp {
     }
 
     fn interface(&mut self, ui: &mut egui::Ui) {
+        self.poll_liquify(ui.ctx());
         ui.data_mut(|d|d.insert_temp(egui::Id::new("active_shortcuts"),self.shortcuts.bindings.clone()));
         ui.ctx().options_mut(|o| o.zoom_with_keyboard = false);
         self.tick_pencil_preferences(ui.ctx());
@@ -1934,13 +1973,14 @@ impl GraphiteApp {
         self.show_pencil_gallery(ui.ctx());
         self.show_paper_settings(ui.ctx());
         self.show_save_as(ui.ctx());
+        self.show_liquify(ui.ctx());
         // Sidebar diagnostics scan the physical sheet. Compute once after an edit,
         // never on every mouse move or while a stroke is still being applied.
         let statistics_ready = self.acceleration != crate::performance::AccelerationMode::IntelHd
             || self
                 .last_statistics_update
                 .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
-        if self.stroke_session.is_none()
+        if self.stroke_session.is_none() && self.liquify.session.is_none()
             && statistics_ready
             && self.sidebar_statistics.0 != self.document.revision()
         {
@@ -1998,9 +2038,10 @@ impl GraphiteApp {
                 ui.allocate_ui_with_layout(Vec2::new(38.,row_height),egui::Layout::top_down(egui::Align::Center),|ui|{
                     ui.spacing_mut().item_spacing.y=3.;
                     for tool in ToolKind::PALETTE {
-                        if crate::ui::tool_icons::tool_button(ui,tool,self.settings.tool==tool).clicked(){
+                        if crate::ui::tool_icons::tool_button(ui,tool,self.liquify.session.is_none()&&self.settings.tool==tool).clicked(){
                             self.select_tool(tool);
                         }
+                        if tool==ToolKind::VectorSelect && crate::ui::tool_icons::liquify_button(ui,self.liquify.session.is_some(),32.).clicked(){self.begin_liquify();}
                     }
                     ui.separator();if ui.button("?").on_hover_text("Tool guide").clicked(){self.editing.guide=true;}
                 });
@@ -2034,6 +2075,10 @@ impl GraphiteApp {
                                         }
                                         ui.small("Drag inside to move; corners resize. Drag the round handle to rotate. Shift: keep proportions / snap 90°.");ui.separator();
                                     }else{ui.horizontal(|ui|{if ui.button(graphite_studio::shortcuts::hint(ui.ctx(),"Transform",Command::Transform)).clicked(){self.begin_transform(ui.ctx());}if ui.button(graphite_studio::shortcuts::hint(ui.ctx(),"Rotate",Command::RotateSelection)).clicked(){self.begin_rotation(ui.ctx());}});}
+                                    ui.horizontal(|ui| {
+                                        let icon=crate::ui::tool_icons::liquify_button(ui,self.liquify.session.is_some(),32.);
+                                        if icon.clicked()||ui.button("Liquify").clicked(){self.begin_liquify();}
+                                    });
                                     if self.settings.tool==ToolKind::Pencil {
                                         if ui.add_sized([240.,44.],egui::Button::new("Pencil gallery…")).clicked() {self.open_pencil_gallery();}
                                         ui.small(self.settings.pencil_texture.as_ref().map(|t|t.name.as_str()).unwrap_or("Standard graphite"));
